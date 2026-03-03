@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "FLoRA — Replication Tracker",
+  "version": "0.1.0",
+  "description": "Surfaces replication and reproduction data from the FLoRA database on academic article pages and Google Scholar.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://flora.research.example/*"
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://scholar.google.com/*", "*://scholar.google.co.*/*"],
+      "js": ["dist/content-general.js"],
+      "css": ["dist/content-general.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://scholar.google.com/*",
+        "*://scholar.google.co.*/*"
+      ],
+      "js": ["dist/content-scholar.js"],
+      "css": ["dist/content-scholar.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "dist/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
