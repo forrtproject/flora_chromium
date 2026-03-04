@@ -61,7 +61,7 @@ export async function processScholarResults(doc: Document): Promise<void> {
       const title = titleEl?.textContent?.trim();
       if (title) {
         rowsWithoutDoi.push({ row, title });
-        injectDebugLabel(row, "no DOI — trying OpenAlex…", "#e65100");
+        injectDebugLabel(row, "no DOI — resolving…", "#e65100");
       } else {
         injectDebugLabel(row, "no DOI, no title", "#b71c1c");
       }
@@ -78,7 +78,7 @@ export async function processScholarResults(doc: Document): Promise<void> {
         const doi = augmented.get(title);
         if (doi) {
           rowDois.push({ row, doi });
-          updateDebugLabel(row, `DOI (via OpenAlex): ${doi}`, "#1565c0");
+          updateDebugLabel(row, `DOI (resolved): ${doi}`, "#1565c0");
         } else {
           updateDebugLabel(row, "no DOI found", "#b71c1c");
         }
