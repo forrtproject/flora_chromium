@@ -11,9 +11,10 @@ export function renderScholarBadge(
   if (row.querySelector(`.${BADGE_HOST_CLASS}`)) return;
 
   const r = state.result;
-  const badgeClass = r.has_failed_replication
-    ? "badge--warning"
-    : "badge--success";
+  const stats = r.record.stats;
+  const badgeClass = stats.n_replications_total > 0
+    ? "badge--success"
+    : "badge--neutral";
 
   const titleEl = row.querySelector(".gs_rt");
   if (!titleEl) return;
@@ -29,14 +30,13 @@ export function renderScholarBadge(
 
   const badge = document.createElement("a");
   badge.className = `flora-scholar-badge ${badgeClass}`;
-  badge.href = r.flora_url;
+  badge.href = `https://forrt.org/fred_repl_landing_page/?doi=${encodeURIComponent(r.doi)}`;
   badge.target = "_blank";
   badge.rel = "noopener";
   badge.innerHTML = `
     <span class="badge-label">FLoRA</span>
-    <span class="badge-count">${r.replication_count} repl</span>
-    ${r.reproduction_count > 0 ? `<span class="badge-count">${r.reproduction_count} repro</span>` : ""}
-    ${r.has_failed_replication ? '<span class="badge-alert">failed replication</span>' : ""}
+    <span class="badge-count">${stats.n_replications_total} repl</span>
+    ${stats.n_reproductions_total > 0 ? `<span class="badge-count">${stats.n_reproductions_total} repro</span>` : ""}
   `;
 
   shadow.appendChild(badge);

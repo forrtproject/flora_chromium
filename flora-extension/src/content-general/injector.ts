@@ -1,4 +1,4 @@
-import type { DoiString, LookupState } from "../shared/types";
+import type { DoiString, LookupState, ReplicationResult } from "../shared/types";
 import { normaliseDOI } from "../shared/doi-normalise";
 import styles from "./styles.css";
 
@@ -12,9 +12,75 @@ let bannerShadow: ShadowRoot | null = null;
 // Banner
 // ──────────────────────────────────────────────
 
-export function renderBanner(_doi: DoiString, state: LookupState): void {
-  let host = document.getElementById(BANNER_HOST_ID);
+export function renderLoadingBanner(): void {
+  ensureBannerHost();
+  const shadow = bannerShadow!;
+  const container = shadow.querySelector(".flora-banner")!;
+  container.innerHTML = `
+    <div class="flora-banner-inner flora-banner--loading">
+      <span class="flora-logo">FLoRA</span>
+      <span class="flora-banner-text">Checking replication data\u2026</span>
+    </div>`;
+}
 
+export function renderErrorBanner(message: string): void {
+  ensureBannerHost();
+  const shadow = bannerShadow!;
+  const container = shadow.querySelector(".flora-banner")!;
+  container.innerHTML = `
+    <div class="flora-banner-inner flora-banner--error">
+      <span class="flora-logo">FLoRA</span>
+      <span class="flora-banner-text">Error: ${escapeHtml(message)}</span>
+      <button class="flora-banner-close" aria-label="Close">\u00d7</button>
+    </div>`;
+  shadow
+    .querySelector(".flora-banner-close")
+    ?.addEventListener("click", () => removeBanner());
+}
+
+export function renderMatchedBanner(
+  matched: { doi: string; result: ReplicationResult }[]
+): void {
+  if (matched.length === 0) {
+    removeBanner();
+    return;
+  }
+
+  ensureBannerHost();
+  const shadow = bannerShadow!;
+  const container = shadow.querySelector(".flora-banner")!;
+
+  const totalRepl = matched.reduce(
+    (sum, m) => sum + m.result.record.stats.n_replications_total, 0
+  );
+  const totalRepro = matched.reduce(
+    (sum, m) => sum + m.result.record.stats.n_reproductions_total, 0
+  );
+
+  const cls = totalRepl > 0 ? "flora-banner--success" : "flora-banner--info";
+
+  const doiCount = matched.length;
+  const summary = doiCount === 1
+    ? `${totalRepl} replication(s), ${totalRepro} reproduction(s)`
+    : `Replication/reproduction data found for ${doiCount} DOIs (${totalRepl} replication(s), ${totalRepro} reproduction(s))`;
+
+  const doisParam = matched.map((m) => m.doi).join(",");
+  const viewLink = `<a class="flora-banner-link" href="https://forrt.org/fred_repl_landing_page/?doi=${encodeURIComponent(doisParam)}" target="_blank" rel="noopener">View details</a>`;
+
+  container.innerHTML = `
+    <div class="flora-banner-inner ${cls}">
+      <span class="flora-logo">FLoRA</span>
+      <span class="flora-banner-text">${summary}</span>
+      ${viewLink}
+      <button class="flora-banner-close" aria-label="Close">\u00d7</button>
+    </div>`;
+  shadow
+    .querySelector(".flora-banner-close")
+    ?.addEventListener("click", () => removeBanner());
+}
+
+function ensureBannerHost(): void {
+  let host = document.getElementById(BANNER_HOST_ID);
   if (!host) {
     host = document.createElement("div");
     host.id = BANNER_HOST_ID;
@@ -30,56 +96,6 @@ export function renderBanner(_doi: DoiString, state: LookupState): void {
 
     document.body.prepend(host);
     adjustPageForBanner();
-  }
-
-  const shadow = bannerShadow ?? host.shadowRoot!;
-  const container = shadow.querySelector(".flora-banner")!;
-
-  switch (state.status) {
-    case "loading":
-      container.innerHTML = `
-        <div class="flora-banner-inner flora-banner--loading">
-          <span class="flora-logo">FLoRA</span>
-          <span class="flora-banner-text">Checking replication data\u2026</span>
-        </div>`;
-      break;
-
-    case "matched": {
-      const r = state.result;
-      const cls = r.has_failed_replication
-        ? "flora-banner--warning"
-        : "flora-banner--success";
-      container.innerHTML = `
-        <div class="flora-banner-inner ${cls}">
-          <span class="flora-logo">FLoRA</span>
-          <span class="flora-banner-text">
-            ${r.replication_count} replication(s), ${r.reproduction_count} reproduction(s)${r.has_failed_replication ? " \u2014 includes failed replications" : ""}
-          </span>
-          <a class="flora-banner-link" href="${escapeAttr(r.flora_url)}" target="_blank" rel="noopener">View on FLoRA</a>
-          <button class="flora-banner-close" aria-label="Close">\u00d7</button>
-        </div>`;
-      shadow
-        .querySelector(".flora-banner-close")
-        ?.addEventListener("click", () => removeBanner());
-      break;
-    }
-
-    case "error":
-      container.innerHTML = `
-        <div class="flora-banner-inner flora-banner--error">
-          <span class="flora-logo">FLoRA</span>
-          <span class="flora-banner-text">Error: ${escapeHtml(state.message)}</span>
-          <button class="flora-banner-close" aria-label="Close">\u00d7</button>
-        </div>`;
-      shadow
-        .querySelector(".flora-banner-close")
-        ?.addEventListener("click", () => removeBanner());
-      break;
-
-    case "no-match":
-    case "idle":
-      removeBanner();
-      break;
   }
 }
 
@@ -130,9 +146,10 @@ export function renderInlineBadges(
     if (!isVisible(link)) continue;
 
     const r = state.result;
-    const badgeClass = r.has_failed_replication
-      ? "badge--warning"
-      : "badge--success";
+    const stats = r.record.stats;
+    const badgeClass = stats.n_replications_total > 0
+      ? "badge--success"
+      : "badge--neutral";
 
     const badgeHost = document.createElement("span");
     badgeHost.className = BADGE_CLASS;
@@ -144,11 +161,11 @@ export function renderInlineBadges(
 
     const badge = document.createElement("a");
     badge.className = `flora-badge ${badgeClass}`;
-    badge.href = r.flora_url;
+    badge.href = `https://forrt.org/fred_repl_landing_page/?doi=${encodeURIComponent(r.doi)}`;
     badge.target = "_blank";
     badge.rel = "noopener";
-    badge.title = `FLoRA: ${r.replication_count} replication(s), ${r.reproduction_count} reproduction(s)`;
-    badge.innerHTML = `<span class="badge-icon">F</span> ${r.replication_count}R`;
+    badge.title = `FLoRA: ${stats.n_replications_total} replication(s), ${stats.n_reproductions_total} reproduction(s)`;
+    badge.innerHTML = `<span class="badge-icon">F</span> ${stats.n_replications_total}R`;
     shadow.appendChild(badge);
 
     link.insertAdjacentElement("afterend", badgeHost);
@@ -157,8 +174,6 @@ export function renderInlineBadges(
 
 function isVisible(el: HTMLElement): boolean {
   const style = window.getComputedStyle(el);
-  // offsetParent is null in jsdom; treat null offsetParent as visible
-  // unless display is explicitly "none"
   return style.display !== "none" && style.visibility !== "hidden";
 }
 

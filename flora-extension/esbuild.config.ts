@@ -1,4 +1,5 @@
 import * as esbuild from "esbuild";
+import { copyFileSync, mkdirSync } from "fs";
 
 const isWatch = process.argv.includes("--watch");
 
@@ -34,7 +35,13 @@ const configs: esbuild.BuildOptions[] = [
   },
 ];
 
+function copyStaticAssets() {
+  mkdirSync("dist", { recursive: true });
+  copyFileSync("src/options/index.html", "dist/options.html");
+}
+
 async function build() {
+  copyStaticAssets();
   if (isWatch) {
     const contexts = await Promise.all(
       configs.map((config) => esbuild.context(config))

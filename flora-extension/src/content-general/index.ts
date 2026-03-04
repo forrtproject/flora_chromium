@@ -1,13 +1,34 @@
 import { extractDOIs } from "../shared/doi-extractor";
+import { augmentDOIs } from "../shared/doi-augment";
 import { debounce } from "../shared/debounce";
 import type { DoiString, LookupState } from "../shared/types";
 import type { LookupRequest, LookupResponse } from "../shared/messages";
-import { renderBanner, removeBanner, renderInlineBadges } from "./injector";
+import { renderLoadingBanner, renderErrorBanner, renderMatchedBanner, removeBanner, renderInlineBadges } from "./injector";
 
 const pageState = new Map<DoiString, LookupState>();
 
 async function run(): Promise<void> {
-  const dois = extractDOIs(document);
+  let dois = extractDOIs(document);
+
+  // If no DOIs found directly, try augmenting from page title
+  if (dois.length === 0) {
+    const pageTitle =
+      document.querySelector<HTMLHeadingElement>("h1")?.textContent?.trim() ||
+      document.title?.trim();
+
+    if (pageTitle) {
+      try {
+        const augmented = await augmentDOIs([pageTitle]);
+        const resolvedDoi = augmented.get(pageTitle);
+        if (resolvedDoi) {
+          dois = [resolvedDoi];
+        }
+      } catch {
+        // Augmentation failed — nothing to show
+      }
+    }
+  }
+
   if (dois.length === 0) return;
 
   const primaryDoi = dois[0];
@@ -16,7 +37,7 @@ async function run(): Promise<void> {
   for (const doi of dois) {
     pageState.set(doi, { status: "loading" });
   }
-  renderBanner(primaryDoi, { status: "loading" });
+  renderLoadingBanner();
 
   const request: LookupRequest = { type: "FLORA_LOOKUP", dois };
 
@@ -34,22 +55,24 @@ async function run(): Promise<void> {
       }
     }
 
-    // Update banner for primary DOI
-    const primaryState = pageState.get(primaryDoi)!;
-    if (primaryState.status === "no-match") {
-      removeBanner();
+    // Collect all matched DOIs for the banner
+    const matched = dois
+      .filter((doi) => pageState.get(doi)?.status === "matched")
+      .map((doi) => ({
+        doi,
+        result: (pageState.get(doi) as { status: "matched"; result: import("../shared/types").ReplicationResult }).result,
+      }));
+
+    if (matched.length > 0) {
+      renderMatchedBanner(matched);
     } else {
-      renderBanner(primaryDoi, primaryState);
+      removeBanner();
     }
 
     // Inline badges for all matched DOIs
     renderInlineBadges(pageState);
   } catch {
-    pageState.set(primaryDoi, {
-      status: "error",
-      message: "Failed to contact FLoRA service",
-    });
-    renderBanner(primaryDoi, pageState.get(primaryDoi)!);
+    renderErrorBanner("Failed to contact FLoRA service");
   }
 }
 

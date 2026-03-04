@@ -1,10 +1,11 @@
 import type { DoiString, ReplicationResult } from "./types";
 import { ApiResponseSchema } from "./types";
 
-const API_BASE = "https://flora.research.example";
+const API_BASE = "https://rep-api.forrt.org";
 
 /**
  * Look up replication data for a batch of DOIs.
+ * Uses the FORRT replication API: GET /v1/original-lookup?dois=doi1,doi2,...
  * Returns a Map of DOI → ReplicationResult for matched DOIs.
  */
 export async function lookupDOIs(
@@ -14,11 +15,10 @@ export async function lookupDOIs(
     return new Map();
   }
 
-  const response = await fetch(`${API_BASE}/api/replications`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dois }),
-  });
+  const doisParam = dois.join(",");
+  const response = await fetch(
+    `${API_BASE}/v1/original-lookup?dois=${encodeURIComponent(doisParam)}`
+  );
 
   if (!response.ok) {
     throw new Error(`FLoRA API error: ${response.status}`);
@@ -28,8 +28,10 @@ export async function lookupDOIs(
   const parsed = ApiResponseSchema.parse(raw);
 
   const results = new Map<DoiString, ReplicationResult>();
-  for (const result of parsed.results) {
-    results.set(result.doi.toLowerCase() as DoiString, result);
+  for (const [doi, result] of Object.entries(parsed.results)) {
+    if (result !== null) {
+      results.set(doi.toLowerCase() as DoiString, result);
+    }
   }
 
   return results;

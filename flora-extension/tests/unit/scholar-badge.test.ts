@@ -1,15 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import type { ReplicationResult } from "../../src/shared/types";
 import { renderScholarBadge } from "../../src/content-scholar/badge";
+import { mockResult } from "../helpers";
 
-const MOCK_RESULT: ReplicationResult = {
-  doi: "10.1038/nature12373",
-  replication_count: 3,
-  reproduction_count: 1,
-  has_failed_replication: false,
-  flora_url: "https://flora.research.example/10.1038/nature12373",
-  last_updated: "2024-01-15T00:00:00Z",
-};
+const MOCK_RESULT = mockResult();
 
 describe("renderScholarBadge", () => {
   let row: HTMLElement;
@@ -47,22 +40,22 @@ describe("renderScholarBadge", () => {
     expect(hosts).toHaveLength(1);
   });
 
-  it("shows warning class for failed replications", () => {
-    const failedResult = { ...MOCK_RESULT, has_failed_replication: true };
-    renderScholarBadge(row, { status: "matched", result: failedResult });
-
-    const host = row.querySelector(".flora-scholar-badge-host");
-    const badge = host?.shadowRoot?.querySelector(".flora-scholar-badge");
-    expect(badge?.classList.contains("badge--warning")).toBe(true);
-    expect(badge?.textContent).toContain("failed replication");
-  });
-
-  it("shows success class for clean replications", () => {
+  it("shows success class when replications exist", () => {
     renderScholarBadge(row, { status: "matched", result: MOCK_RESULT });
 
     const host = row.querySelector(".flora-scholar-badge-host");
     const badge = host?.shadowRoot?.querySelector(".flora-scholar-badge");
     expect(badge?.classList.contains("badge--success")).toBe(true);
+  });
+
+  it("shows neutral class when no replications", () => {
+    const noReplResult = mockResult();
+    noReplResult.record.stats.n_replications_total = 0;
+    renderScholarBadge(row, { status: "matched", result: noReplResult });
+
+    const host = row.querySelector(".flora-scholar-badge-host");
+    const badge = host?.shadowRoot?.querySelector(".flora-scholar-badge");
+    expect(badge?.classList.contains("badge--neutral")).toBe(true);
   });
 
   it("does nothing for non-matched states", () => {

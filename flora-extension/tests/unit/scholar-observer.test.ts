@@ -3,22 +3,14 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { JSDOM } from "jsdom";
 import type { LookupResponse } from "../../src/shared/messages";
-import type { ReplicationResult } from "../../src/shared/types";
+import { mockResult } from "../helpers";
 
-const MOCK_RESULT: ReplicationResult = {
-  doi: "10.1038/nature12373",
-  replication_count: 3,
-  reproduction_count: 1,
-  has_failed_replication: false,
-  flora_url: "https://flora.research.example/10.1038/nature12373",
-  last_updated: "2024-01-15T00:00:00Z",
-};
+const MOCK_RESULT = mockResult();
 
 describe("scholar observer", () => {
   beforeEach(() => {
     vi.resetModules();
 
-    // Set up Scholar-like DOM
     const html = readFileSync(
       join(__dirname, "..", "fixtures", "scholar-results.html"),
       "utf-8"
@@ -26,7 +18,6 @@ describe("scholar observer", () => {
     const dom = new JSDOM(html);
     document.body.innerHTML = dom.window.document.body.innerHTML;
 
-    // Mock sendMessage to return results for the known DOI
     const mockResponse: LookupResponse = {
       type: "FLORA_LOOKUP_RESULT",
       results: {
@@ -64,7 +55,6 @@ describe("scholar observer", () => {
     );
     expect(processedRows.length).toBeGreaterThan(0);
 
-    // Second call should not send another message
     (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockClear();
     await processScholarResults(document);
     expect(chrome.runtime.sendMessage).not.toHaveBeenCalled();
@@ -76,7 +66,6 @@ describe("scholar observer", () => {
     );
     await processScholarResults(document);
 
-    // The first row has doi.org link in title
     const call = (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock
       .calls[0][0];
     expect(call.dois).toContain("10.1038/nature12373");
@@ -90,7 +79,6 @@ describe("scholar observer", () => {
 
     const call = (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mock
       .calls[0][0];
-    // Second row has DOI in the .gs_a text
     expect(call.dois).toContain("10.1126/science.9999999");
   });
 });

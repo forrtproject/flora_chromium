@@ -8,7 +8,8 @@
     "storage"
   ],
   "host_permissions": [
-    "https://flora.research.example/*"
+    "https://rep-api.forrt.org/*",
+    "https://api.openalex.org/*"
   ],
   "background": {
     "service_worker": "dist/background.js"
@@ -16,28 +17,52 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "exclude_matches": ["*://scholar.google.com/*", "*://scholar.google.co.*/*"],
+      "exclude_matches": [
+        "*://scholar.google.com/*",
+        "*://scholar.google.co.uk/*",
+        "*://scholar.google.co.in/*",
+        "*://scholar.google.co.jp/*",
+        "*://scholar.google.co.kr/*",
+        "*://scholar.google.co.za/*",
+        "*://scholar.google.co.id/*",
+        "*://scholar.google.co.th/*",
+        "*://scholar.google.co.il/*",
+        "*://scholar.google.ca/*",
+        "*://scholar.google.de/*",
+        "*://scholar.google.fr/*",
+        "*://scholar.google.es/*",
+        "*://scholar.google.it/*",
+        "*://scholar.google.com.br/*",
+        "*://scholar.google.com.au/*"
+      ],
       "js": ["dist/content-general.js"],
-      "css": ["dist/content-general.css"],
       "run_at": "document_idle"
     },
     {
       "matches": [
         "*://scholar.google.com/*",
-        "*://scholar.google.co.*/*"
+        "*://scholar.google.co.uk/*",
+        "*://scholar.google.co.in/*",
+        "*://scholar.google.co.jp/*",
+        "*://scholar.google.co.kr/*",
+        "*://scholar.google.co.za/*",
+        "*://scholar.google.co.id/*",
+        "*://scholar.google.co.th/*",
+        "*://scholar.google.co.il/*",
+        "*://scholar.google.ca/*",
+        "*://scholar.google.de/*",
+        "*://scholar.google.fr/*",
+        "*://scholar.google.es/*",
+        "*://scholar.google.it/*",
+        "*://scholar.google.com.br/*",
+        "*://scholar.google.com.au/*"
       ],
       "js": ["dist/content-scholar.js"],
-      "css": ["dist/content-scholar.css"],
       "run_at": "document_idle"
     }
   ],
   "options_ui": {
     "page": "dist/options.html",
     "open_in_tab": true
-  },
-  "icons": {
-    "16": "icons/icon-16.png",
-    "48": "icons/icon-48.png",
-    "128": "icons/icon-128.png"
   }
 }

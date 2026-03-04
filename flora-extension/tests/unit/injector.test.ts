@@ -1,19 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import type { DoiString, LookupState, ReplicationResult } from "../../src/shared/types";
-import { renderBanner, removeBanner, renderInlineBadges } from "../../src/content-general/injector";
+import type { DoiString, LookupState } from "../../src/shared/types";
+import { renderLoadingBanner, renderErrorBanner, renderMatchedBanner, removeBanner, renderInlineBadges } from "../../src/content-general/injector";
+import { doi, mockResult } from "../helpers";
 
-function doi(s: string): DoiString {
-  return s as DoiString;
-}
-
-const MOCK_RESULT: ReplicationResult = {
-  doi: "10.1038/nature12373",
-  replication_count: 3,
-  reproduction_count: 1,
-  has_failed_replication: false,
-  flora_url: "https://flora.research.example/10.1038/nature12373",
-  last_updated: "2024-01-15T00:00:00Z",
-};
+const MOCK_RESULT = mockResult();
 
 describe("injector", () => {
   beforeEach(() => {
@@ -21,9 +11,9 @@ describe("injector", () => {
     document.body.style.removeProperty("margin-top");
   });
 
-  describe("renderBanner", () => {
+  describe("renderLoadingBanner", () => {
     it("creates a Shadow DOM host when rendering loading state", () => {
-      renderBanner(doi("10.1038/nature12373"), { status: "loading" });
+      renderLoadingBanner();
 
       const host = document.getElementById("flora-banner-host");
       expect(host).not.toBeNull();
@@ -33,12 +23,15 @@ describe("injector", () => {
       expect(bannerText?.textContent).toContain("Checking");
     });
 
-    it("updates banner content on matched state", () => {
-      renderBanner(doi("10.1038/nature12373"), { status: "loading" });
-      renderBanner(doi("10.1038/nature12373"), {
-        status: "matched",
-        result: MOCK_RESULT,
-      });
+    it("adjusts body margin-top for banner space", () => {
+      renderLoadingBanner();
+      expect(document.body.style.marginTop).toBe("40px");
+    });
+  });
+
+  describe("renderMatchedBanner", () => {
+    it("shows replication counts for a single DOI", () => {
+      renderMatchedBanner([{ doi: "10.1038/nature12373", result: MOCK_RESULT }]);
 
       const host = document.getElementById("flora-banner-host");
       const bannerText = host?.shadowRoot?.querySelector(".flora-banner-text");
@@ -46,39 +39,60 @@ describe("injector", () => {
       expect(bannerText?.textContent).toContain("1 reproduction(s)");
     });
 
-    it("shows warning class for failed replications", () => {
-      const failedResult = { ...MOCK_RESULT, has_failed_replication: true };
-      renderBanner(doi("10.1038/nature12373"), {
-        status: "matched",
-        result: failedResult,
-      });
+    it("shows success class when replications exist", () => {
+      renderMatchedBanner([{ doi: "10.1038/nature12373", result: MOCK_RESULT }]);
 
       const host = document.getElementById("flora-banner-host");
       const inner = host?.shadowRoot?.querySelector(".flora-banner-inner");
-      expect(inner?.classList.contains("flora-banner--warning")).toBe(true);
+      expect(inner?.classList.contains("flora-banner--success")).toBe(true);
     });
 
+    it("shows DOI count summary for multiple DOIs", () => {
+      renderMatchedBanner([
+        { doi: "10.1038/nature12373", result: MOCK_RESULT },
+        { doi: "10.1126/science.9999", result: MOCK_RESULT },
+      ]);
+
+      const host = document.getElementById("flora-banner-host");
+      const bannerText = host?.shadowRoot?.querySelector(".flora-banner-text");
+      expect(bannerText?.textContent).toContain("2 DOIs");
+    });
+
+    it("shows single View details link for multiple DOIs", () => {
+      renderMatchedBanner([
+        { doi: "10.1038/nature12373", result: MOCK_RESULT },
+        { doi: "10.1126/science.9999", result: MOCK_RESULT },
+      ]);
+
+      const host = document.getElementById("flora-banner-host");
+      const links = host?.shadowRoot?.querySelectorAll(".flora-banner-link");
+      expect(links?.length).toBe(1);
+      expect(links?.[0].textContent).toBe("View details");
+    });
+
+    it("removes banner when no matches", () => {
+      renderLoadingBanner();
+      expect(document.getElementById("flora-banner-host")).not.toBeNull();
+
+      renderMatchedBanner([]);
+      expect(document.getElementById("flora-banner-host")).toBeNull();
+    });
+  });
+
+  describe("renderErrorBanner", () => {
     it("shows error state", () => {
-      renderBanner(doi("10.1038/nature12373"), {
-        status: "error",
-        message: "API failed",
-      });
+      renderErrorBanner("API failed");
 
       const host = document.getElementById("flora-banner-host");
       const inner = host?.shadowRoot?.querySelector(".flora-banner-inner");
       expect(inner?.classList.contains("flora-banner--error")).toBe(true);
       expect(inner?.textContent).toContain("API failed");
     });
-
-    it("adjusts body margin-top for banner space", () => {
-      renderBanner(doi("10.1038/nature12373"), { status: "loading" });
-      expect(document.body.style.marginTop).toBe("40px");
-    });
   });
 
   describe("removeBanner", () => {
     it("removes the banner host element", () => {
-      renderBanner(doi("10.1038/nature12373"), { status: "loading" });
+      renderLoadingBanner();
       expect(document.getElementById("flora-banner-host")).not.toBeNull();
 
       removeBanner();
@@ -86,7 +100,7 @@ describe("injector", () => {
     });
 
     it("restores body margin-top", () => {
-      renderBanner(doi("10.1038/nature12373"), { status: "loading" });
+      renderLoadingBanner();
       removeBanner();
       expect(document.body.style.marginTop).toBe("");
     });

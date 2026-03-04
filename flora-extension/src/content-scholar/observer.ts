@@ -1,4 +1,5 @@
 import { normaliseDOI } from "../shared/doi-normalise";
+import { augmentDOIs } from "../shared/doi-augment";
 import type { DoiString } from "../shared/types";
 import type { LookupRequest, LookupResponse } from "../shared/messages";
 import { renderScholarBadge } from "./badge";
@@ -38,26 +39,68 @@ export async function processScholarResults(doc: Document): Promise<void> {
   const rows = doc.querySelectorAll<HTMLElement>(
     `${RESULT_ROW}:not([${PROCESSED_ATTR}])`
   );
-  if (rows.length === 0) return;
+  if (rows.length === 0) {
+    console.log("[FLoRA] No unprocessed Scholar rows found");
+    return;
+  }
+
+  console.log(`[FLoRA] Processing ${rows.length} Scholar rows`);
 
   const rowDois: { row: HTMLElement; doi: DoiString }[] = [];
+  const rowsWithoutDoi: { row: HTMLElement; title: string }[] = [];
 
   for (const row of rows) {
     row.setAttribute(PROCESSED_ATTR, "true");
     const doi = extractDoiFromScholarRow(row);
     if (doi) {
       rowDois.push({ row, doi });
+      injectDebugLabel(row, `DOI: ${doi}`, "#2e7d32");
+    } else {
+      // No DOI found directly — extract title for OpenAlex augmentation
+      const titleEl = row.querySelector(".gs_rt");
+      const title = titleEl?.textContent?.trim();
+      if (title) {
+        rowsWithoutDoi.push({ row, title });
+        injectDebugLabel(row, "no DOI — trying OpenAlex…", "#e65100");
+      } else {
+        injectDebugLabel(row, "no DOI, no title", "#b71c1c");
+      }
     }
   }
+
+  // Augment missing DOIs via OpenAlex
+  if (rowsWithoutDoi.length > 0) {
+    try {
+      const titles = rowsWithoutDoi.map((r) => r.title);
+      const augmented = await augmentDOIs(titles);
+
+      for (const { row, title } of rowsWithoutDoi) {
+        const doi = augmented.get(title);
+        if (doi) {
+          rowDois.push({ row, doi });
+          updateDebugLabel(row, `DOI (via OpenAlex): ${doi}`, "#1565c0");
+        } else {
+          updateDebugLabel(row, "no DOI found", "#b71c1c");
+        }
+      }
+    } catch {
+      // Augmentation failed — continue with what we have
+    }
+  }
+
+  console.log(`[FLoRA] DOIs found: ${rowDois.length}, titles without DOI: ${rowsWithoutDoi.length}`);
 
   if (rowDois.length === 0) return;
 
   const uniqueDois = [...new Set(rowDois.map((rd) => rd.doi))];
+  console.log("[FLoRA] Looking up DOIs:", uniqueDois);
   const request: LookupRequest = { type: "FLORA_LOOKUP", dois: uniqueDois };
 
   try {
     const response: LookupResponse =
       await chrome.runtime.sendMessage(request);
+
+    console.log("[FLoRA] Lookup response:", response);
 
     for (const { row, doi } of rowDois) {
       if (response.results[doi]) {
@@ -65,10 +108,72 @@ export async function processScholarResults(doc: Document): Promise<void> {
           status: "matched",
           result: response.results[doi],
         });
+        appendDebugLabel(row, "FLoRA: MATCH ✓", "#2e7d32");
+      } else if (response.errors[doi]) {
+        appendDebugLabel(row, `FLoRA: error — ${response.errors[doi]}`, "#b71c1c");
+      } else {
+        appendDebugLabel(row, "FLoRA: no replication data", "#757575");
       }
     }
-  } catch {
-    // Silently fail — don't break Scholar
+  } catch (err) {
+    console.error("[FLoRA] Lookup failed:", err);
+    for (const { row } of rowDois) {
+      appendDebugLabel(row, "FLoRA: lookup failed", "#b71c1c");
+    }
+  }
+}
+
+const DEBUG_LABEL_CLASS = "flora-debug-label";
+
+function injectDebugLabel(row: HTMLElement, text: string, color: string): void {
+  const titleEl = row.querySelector(".gs_rt");
+  if (!titleEl) return;
+
+  const label = document.createElement("span");
+  label.className = DEBUG_LABEL_CLASS;
+  label.textContent = `[FLoRA] ${text}`;
+  label.style.cssText = `
+    display: inline-block;
+    font-size: 11px;
+    font-family: monospace;
+    color: white;
+    background: ${color};
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+  `;
+  titleEl.appendChild(label);
+}
+
+function appendDebugLabel(row: HTMLElement, text: string, color: string): void {
+  const titleEl = row.querySelector(".gs_rt");
+  if (!titleEl) return;
+
+  const label = document.createElement("span");
+  label.className = "flora-debug-flora-status";
+  label.textContent = `[${text}]`;
+  label.style.cssText = `
+    display: inline-block;
+    font-size: 11px;
+    font-family: monospace;
+    color: white;
+    background: ${color};
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+  `;
+  titleEl.appendChild(label);
+}
+
+function updateDebugLabel(row: HTMLElement, text: string, color: string): void {
+  const existing = row.querySelector(`.${DEBUG_LABEL_CLASS}`);
+  if (existing) {
+    existing.textContent = `[FLoRA] ${text}`;
+    (existing as HTMLElement).style.background = color;
+  } else {
+    injectDebugLabel(row, text, color);
   }
 }
 
