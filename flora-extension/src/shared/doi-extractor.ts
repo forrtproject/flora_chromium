@@ -7,6 +7,21 @@ const DOI_REGEX = /(10\.\d{4,}(?:\.\d+)*\/[^\s,;\]}>'"<#?&]+)/g;
 
 const LOG_PREFIX = "[FLoRA:extractor]";
 
+// Characters inserted by browsers/sites for word-break purposes that can split DOIs
+const WORD_BREAK_CHARS = /[\u200B\u200C\u200D\u00AD\uFEFF\u2060]/g;
+
+/**
+ * Reject DOI fragments where the suffix (after registrant/) is too short.
+ * Real DOI suffixes are almost never a single character — fragments like
+ * "10.1016/j" or "10.1007/s" come from HTML splitting a DOI across elements.
+ */
+function isValidDoiSuffix(doi: string): boolean {
+  const slashIdx = doi.indexOf("/");
+  if (slashIdx === -1) return false;
+  const suffix = doi.slice(slashIdx + 1);
+  return suffix.length >= 2;
+}
+
 function cleanDoiTrailing(raw: string): string {
   // Strip trailing punctuation
   let cleaned = raw.replace(/[.,;:]+$/, "");
@@ -29,8 +44,6 @@ function cleanDoiTrailing(raw: string): string {
   cleaned = cleaned.slice(0, lastBalanced);
   // Strip trailing punctuation again after paren trimming
   cleaned = cleaned.replace(/[.,;:]+$/, "");
-  // Strip supplementary file paths (e.g. /suppl_file/..., /asset/..., /full, /abstract)
-  cleaned = cleaned.replace(/\/(?:suppl_file|asset|supplementary|full|abstract|summary|pdf|epub)\/.*$/i, "");
   return cleaned;
 }
 
@@ -39,8 +52,8 @@ function cleanDoiTrailing(raw: string): string {
  * 1. Page URL (catches DOIs in journal URLs like sagepub.com/doi/abs/10.xxx)
  * 2. <meta> tags (citation_doi, DC.identifier, etc.)
  * 3. JSON-LD structured data
- * 4. Regex over visible text and links
- * 5. Regex over raw HTML (catches DOIs in data attributes, table cells, hidden elements)
+ * 4. DOI resolver links (doi.org / dx.doi.org hrefs with truncated visible text)
+ * 5. Regex over visible body text only
  */
 export function extractDOIs(doc: Document): DoiString[] {
   const found = new Set<DoiString>();
@@ -60,15 +73,15 @@ export function extractDOIs(doc: Document): DoiString[] {
   if (found.size > beforeJsonLd)
     console.log(`${LOG_PREFIX} JSON-LD layer found ${found.size - beforeJsonLd} new DOI(s)`);
 
-  const beforeRegex = found.size;
-  extractFromRegex(doc, found);
-  if (found.size > beforeRegex)
-    console.log(`${LOG_PREFIX} Regex layer found ${found.size - beforeRegex} new DOI(s)`);
+  const beforeDoiLinks = found.size;
+  extractFromDoiLinks(doc, found);
+  if (found.size > beforeDoiLinks)
+    console.log(`${LOG_PREFIX} DOI link layer found ${found.size - beforeDoiLinks} new DOI(s)`);
 
-  const beforeHtml = found.size;
-  extractFromRawHtml(doc, found);
-  if (found.size > beforeHtml)
-    console.log(`${LOG_PREFIX} Raw HTML layer found ${found.size - beforeHtml} new DOI(s)`);
+  const beforeText = found.size;
+  extractFromVisibleText(doc, found);
+  if (found.size > beforeText)
+    console.log(`${LOG_PREFIX} Visible text layer found ${found.size - beforeText} new DOI(s)`);
 
   const result = [...found];
   if (result.length > 0) {
@@ -84,7 +97,9 @@ function extractFromUrl(doc: Document, found: Set<DoiString>): void {
   const url = doc.location?.href ?? "";
   const matches = url.matchAll(DOI_REGEX);
   for (const match of matches) {
-    const doi = normaliseDOI(cleanDoiTrailing(match[1]));
+    const cleaned = cleanDoiTrailing(match[1]);
+    if (!isValidDoiSuffix(cleaned)) continue;
+    const doi = normaliseDOI(cleaned);
     if (doi) found.add(doi);
   }
 }
@@ -133,31 +148,33 @@ function extractFromJsonLd(doc: Document, found: Set<DoiString>): void {
   }
 }
 
-function extractFromRegex(doc: Document, found: Set<DoiString>): void {
-  // Search links first
+function extractFromDoiLinks(doc: Document, found: Set<DoiString>): void {
   const links = doc.querySelectorAll<HTMLAnchorElement>("a[href]");
   for (const link of links) {
-    const matches = link.href.matchAll(DOI_REGEX);
-    for (const match of matches) {
-      const doi = normaliseDOI(cleanDoiTrailing(match[1]));
-      if (doi) found.add(doi);
+    const href = link.href;
+    if (!href) continue;
+    // Only extract from known DOI resolver domains
+    try {
+      const url = new URL(href);
+      const host = url.hostname.toLowerCase();
+      if (host !== "doi.org" && host !== "dx.doi.org") continue;
+    } catch {
+      continue;
     }
-  }
-
-  // Then visible body text
-  const bodyText = doc.body?.innerText || doc.body?.textContent || "";
-  const matches = bodyText.matchAll(DOI_REGEX);
-  for (const match of matches) {
-    const doi = normaliseDOI(cleanDoiTrailing(match[1]));
+    const doi = normaliseDOI(href);
     if (doi) found.add(doi);
   }
 }
 
-function extractFromRawHtml(doc: Document, found: Set<DoiString>): void {
-  const html = doc.body?.innerHTML ?? "";
-  const matches = html.matchAll(DOI_REGEX);
+function extractFromVisibleText(doc: Document, found: Set<DoiString>): void {
+  const rawText = doc.body?.innerText || doc.body?.textContent || "";
+  // Strip invisible word-break characters that sites insert for overflow-wrap/break-word
+  const bodyText = rawText.replace(WORD_BREAK_CHARS, "");
+  const matches = bodyText.matchAll(DOI_REGEX);
   for (const match of matches) {
-    const doi = normaliseDOI(cleanDoiTrailing(match[1]));
+    const cleaned = cleanDoiTrailing(match[1]);
+    if (!isValidDoiSuffix(cleaned)) continue;
+    const doi = normaliseDOI(cleaned);
     if (doi) found.add(doi);
   }
 }

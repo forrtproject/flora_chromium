@@ -16,7 +16,7 @@ function highlightDoisOnPage(dois: string[]): void {
 
   // Build a regex matching any of the DOIs
   const escaped = dois.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`(${escaped.join("|")})`, "g");
+  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
 
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   const nodesToReplace: { node: Text; html: string }[] = [];
