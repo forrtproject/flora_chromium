@@ -22,8 +22,8 @@ export function renderScholarBadge(
     ? "badge--success"
     : "badge--neutral";
 
-  const titleEl = row.querySelector(".gs_rt");
-  if (!titleEl) return;
+  // Place badge on the right side (PDF area), falling back to .gs_ri or row
+  const target = row.querySelector(".gs_ggs") ?? row.querySelector(".gs_ri") ?? row;
 
   const host = document.createElement("div");
   host.className = BADGE_HOST_CLASS;
@@ -51,5 +51,5 @@ export function renderScholarBadge(
   `;
 
   shadow.appendChild(badge);
-  titleEl.insertAdjacentElement("afterend", host);
+  target.appendChild(host);
 }
