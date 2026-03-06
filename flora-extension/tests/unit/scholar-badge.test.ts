@@ -20,12 +20,13 @@ describe("renderScholarBadge", () => {
     document.body.appendChild(row);
   });
 
-  it("inserts a Shadow DOM badge after .gs_rt", () => {
+  it("inserts a Shadow DOM badge inside .gs_ri", () => {
     renderScholarBadge(row, { status: "matched", result: MOCK_RESULT });
 
     const host = row.querySelector(".flora-scholar-badge-host");
     expect(host).not.toBeNull();
     expect(host?.shadowRoot).not.toBeNull();
+    expect(host?.parentElement?.classList.contains("gs_ri")).toBe(true);
 
     const badge = host?.shadowRoot?.querySelector(".flora-scholar-badge");
     expect(badge).not.toBeNull();
@@ -65,9 +66,11 @@ describe("renderScholarBadge", () => {
     expect(row.querySelector(".flora-scholar-badge-host")).toBeNull();
   });
 
-  it("does nothing if row has no .gs_rt element", () => {
-    const emptyRow = document.createElement("div");
-    renderScholarBadge(emptyRow, { status: "matched", result: MOCK_RESULT });
-    expect(emptyRow.querySelector(".flora-scholar-badge-host")).toBeNull();
+  it("falls back to appending on the row itself if no .gs_ggs or .gs_ri", () => {
+    const bareRow = document.createElement("div");
+    renderScholarBadge(bareRow, { status: "matched", result: MOCK_RESULT });
+    const host = bareRow.querySelector(".flora-scholar-badge-host");
+    expect(host).not.toBeNull();
+    expect(host?.parentElement).toBe(bareRow);
   });
 });
