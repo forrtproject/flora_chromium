@@ -1,7 +1,8 @@
 /* === Banner === */
 .flora-banner {
   all: initial;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 .flora-banner-inner {
@@ -20,10 +21,18 @@
   color: #fff;
 }
 
-.flora-banner--loading { background: #6b7280; }
-.flora-banner--success { background: #16a34a; }
-.flora-banner--warning { background: #ea580c; }
-.flora-banner--error   { background: #dc2626; }
+.flora-banner--loading {
+  background: #6b7280;
+}
+.flora-banner--success {
+  background: #16a34a;
+}
+.flora-banner--warning {
+  background: #ea580c;
+}
+.flora-banner--error {
+  background: #dc2626;
+}
 
 .flora-logo {
   font-weight: 700;
@@ -68,7 +77,8 @@
   margin-left: 6px;
   padding: 2px 8px;
   border-radius: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
@@ -76,10 +86,15 @@
   cursor: pointer;
   vertical-align: middle;
   color: #fff;
+  z-index: 9999;
 }
 
-.badge--success { background: #16a34a; }
-.badge--warning { background: #ea580c; }
+.badge--success {
+  background: #16a34a;
+}
+.badge--warning {
+  background: #ea580c;
+}
 
 .badge-icon {
   font-weight: 800;

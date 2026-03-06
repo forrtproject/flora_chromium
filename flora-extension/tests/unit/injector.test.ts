@@ -35,8 +35,8 @@ describe("injector", () => {
 
       const host = document.getElementById("flora-banner-host");
       const bannerText = host?.shadowRoot?.querySelector(".flora-banner-text");
-      expect(bannerText?.textContent).toContain("3 replication(s)");
-      expect(bannerText?.textContent).toContain("1 reproduction(s)");
+      expect(bannerText?.textContent).toContain("3 replications");
+      expect(bannerText?.textContent).toContain("1 reproduction");
     });
 
     it("shows success class when replications exist", () => {
