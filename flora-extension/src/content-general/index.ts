@@ -7,46 +7,51 @@ import { renderErrorBanner, renderMatchedBanner, removeBanner, renderInlineBadge
 
 const LOG_PREFIX = "[FLoRA]";
 
-/**
- * DEBUG: Highlight any text on the page that contains an extracted DOI.
- * Walks text nodes and wraps DOI matches with a bright background span.
- */
-function highlightDoisOnPage(dois: string[]): void {
-  if (dois.length === 0) return;
-
-  // Build a regex matching any of the DOIs
-  const escaped = dois.map((d) => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
-
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  const nodesToReplace: { node: Text; html: string }[] = [];
-
-  let textNode: Text | null;
-  while ((textNode = walker.nextNode() as Text | null)) {
-    if (!textNode.nodeValue || !pattern.test(textNode.nodeValue)) continue;
-    pattern.lastIndex = 0; // reset after .test()
-    const parent = textNode.parentElement;
-    if (!parent || parent.tagName === "SCRIPT" || parent.tagName === "STYLE") continue;
-
-    const html = textNode.nodeValue.replace(
-      pattern,
-      `<span style="background:#ffeb3b;outline:2px solid #f57f17;border-radius:2px;padding:0 2px" title="FLoRA DOI">$1</span>`
-    );
-    nodesToReplace.push({ node: textNode, html });
-  }
-
-  for (const { node, html } of nodesToReplace) {
-    const wrapper = document.createElement("span");
-    wrapper.innerHTML = html;
-    node.parentNode?.replaceChild(wrapper, node);
-  }
-
-  console.log(`${LOG_PREFIX} DEBUG: Highlighted ${nodesToReplace.length} text occurrence(s) of ${dois.length} DOI(s)`);
-}
-
 const pageState = new Map<DoiString, LookupState>();
 const processedDois = new Set<DoiString>();
 let lastUrl = location.href;
+let augmentAttempted = false;
+
+/**
+ * Silently try to resolve a DOI from the page title via Crossref/OpenAlex.
+ * Runs in the background with no UI — only logs to the console.
+ */
+async function augmentFromTitle(): Promise<void> {
+  if (augmentAttempted) return;
+  augmentAttempted = true;
+
+  const pageTitle =
+    document.querySelector<HTMLHeadingElement>("h1")?.textContent?.trim() ||
+    document.title?.trim();
+
+  if (!pageTitle) {
+    console.log(`${LOG_PREFIX} No page title available for augmentation`);
+    return;
+  }
+
+  console.log(`${LOG_PREFIX} No DOIs extracted, augmenting from title in background: "${pageTitle}"`);
+  try {
+    const augmented = await augmentDOIs([pageTitle]);
+    const resolvedDoi = augmented.get(pageTitle);
+    if (resolvedDoi) {
+      console.log(`${LOG_PREFIX} Title augmented to DOI: ${resolvedDoi} (background, no UI)`);
+      processedDois.add(resolvedDoi);
+
+      // Silently look up replication data — log result but don't render any UI
+      const request: LookupRequest = { type: "FLORA_LOOKUP", dois: [resolvedDoi] };
+      const response: LookupResponse = await chrome.runtime.sendMessage(request);
+      if (response.results[resolvedDoi]) {
+        console.log(`${LOG_PREFIX} Background augmented DOI ${resolvedDoi} has replication data`);
+      } else {
+        console.log(`${LOG_PREFIX} Background augmented DOI ${resolvedDoi} has no replication data`);
+      }
+    } else {
+      console.log(`${LOG_PREFIX} Title augmentation found no DOI`);
+    }
+  } catch (err) {
+    console.warn(`${LOG_PREFIX} Background augmentation failed:`, err);
+  }
+}
 
 async function run(): Promise<void> {
   console.log(`${LOG_PREFIX} Running on ${location.href}`);
@@ -58,47 +63,30 @@ async function run(): Promise<void> {
     lastUrl = currentUrl;
     processedDois.clear();
     pageState.clear();
+    augmentAttempted = false;
     removeBanner();
   }
 
-  let dois = extractDOIs(document);
-
-  // If no DOIs found directly, try augmenting from page title
-  if (dois.length === 0) {
-    const pageTitle =
-      document.querySelector<HTMLHeadingElement>("h1")?.textContent?.trim() ||
-      document.title?.trim();
-
-    if (pageTitle) {
-      console.log(`${LOG_PREFIX} No DOIs extracted, augmenting from title: "${pageTitle}"`);
-      try {
-        const augmented = await augmentDOIs([pageTitle]);
-        const resolvedDoi = augmented.get(pageTitle);
-        if (resolvedDoi) {
-          console.log(`${LOG_PREFIX} Title augmented to DOI: ${resolvedDoi}`);
-          dois = [resolvedDoi];
-        } else {
-          console.log(`${LOG_PREFIX} Title augmentation found no DOI`);
-        }
-      } catch (err) {
-        console.warn(`${LOG_PREFIX} Augmentation failed:`, err);
-      }
-    } else {
-      console.log(`${LOG_PREFIX} No DOIs found and no page title available`);
-    }
-  }
+  const dois = extractDOIs(document);
 
   // Filter out already-processed DOIs
   const newDois = dois.filter((doi) => !processedDois.has(doi));
+
+  // If no new DOIs found directly, try augmenting from page title in the background
+  if (newDois.length === 0 && dois.length === 0) {
+    augmentFromTitle();
+    if (processedDois.size > 0) {
+      console.log(`${LOG_PREFIX} No new DOIs to process (${processedDois.size} already processed)`);
+    }
+    return;
+  }
+
   if (newDois.length === 0) {
     console.log(`${LOG_PREFIX} No new DOIs to process (${processedDois.size} already processed)`);
     return;
   }
 
   console.log(`${LOG_PREFIX} Processing ${newDois.length} new DOI(s):`, newDois);
-
-  // DEBUG: highlight extracted DOIs on the page
-  highlightDoisOnPage(newDois);
 
   for (const doi of newDois) {
     processedDois.add(doi);

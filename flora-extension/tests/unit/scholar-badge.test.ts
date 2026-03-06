@@ -29,7 +29,7 @@ describe("renderScholarBadge", () => {
 
     const badge = host?.shadowRoot?.querySelector(".flora-scholar-badge");
     expect(badge).not.toBeNull();
-    expect(badge?.textContent).toContain("3 repl");
+    expect(badge?.textContent).toContain("3 replications");
   });
 
   it("does not double-render badges", () => {
@@ -48,9 +48,11 @@ describe("renderScholarBadge", () => {
     expect(badge?.classList.contains("badge--success")).toBe(true);
   });
 
-  it("shows neutral class when no replications", () => {
+  it("shows neutral class when only originals (no replications or reproductions)", () => {
     const noReplResult = mockResult();
     noReplResult.record.stats.n_replications_total = 0;
+    noReplResult.record.stats.n_reproductions_total = 0;
+    noReplResult.record.stats.n_originals_total = 5;
     renderScholarBadge(row, { status: "matched", result: noReplResult });
 
     const host = row.querySelector(".flora-scholar-badge-host");
