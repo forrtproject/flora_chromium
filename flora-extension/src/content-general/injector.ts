@@ -152,10 +152,16 @@ export function renderInlineBadges(
   for (const link of allLinks) {
     if (link.nextElementSibling?.classList.contains(BADGE_CLASS)) continue;
 
-    const hrefMatch = link.href.match(/\b(10\.\d{4,}(?:\.\d+)*\/\S+)\b/);
-    if (!hrefMatch) continue;
+    // Only badge links whose visible text contains a DOI, or that point to doi.org
+    const textMatch = link.textContent?.match(/\b(10\.\d{4,}(?:\.\d+)*\/\S+)\b/);
+    const isDoiOrgLink = /^https?:\/\/(dx\.)?doi\.org\//i.test(link.href);
+    const hrefMatch = isDoiOrgLink
+      ? link.href.match(/\b(10\.\d{4,}(?:\.\d+)*\/\S+)\b/)
+      : null;
+    const rawDoi = textMatch?.[1] ?? hrefMatch?.[1];
+    if (!rawDoi) continue;
 
-    const doi = normaliseDOI(hrefMatch[1]);
+    const doi = normaliseDOI(rawDoi);
     if (!doi) continue;
 
     const state = pageState.get(doi);
@@ -222,6 +228,3 @@ function escapeHtml(s: string): string {
   });
 }
 
-function escapeAttr(s: string): string {
-  return escapeHtml(s);
-}
