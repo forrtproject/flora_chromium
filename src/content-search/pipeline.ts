@@ -45,7 +45,7 @@ export const PROCESSED_ATTR = "data-flora-processed";
 let unansweredRows = new WeakSet<HTMLElement>();
 let searchRetryToast: HTMLElement | null = null;
 let searchRetryMessage = "";
-let retryingSearchChecks = false;
+let retryingSearchChecks: {page: string; generation: number} | null = null;
 let searchRequiresReload = false;
 
 export async function retryUnansweredSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
@@ -82,6 +82,7 @@ function syncRetractionPage(): void {
     if (retractionPage === location.href) return;
     retractionPage = location.href;
     searchNavigationGeneration++;
+    retryingSearchChecks = null;
     unavailableRetractionDois.clear();
     lookupState.clear();
     retractions.clear();
@@ -488,7 +489,7 @@ async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): 
         : titleFailed ? "DOI matching unavailable for some results."
         : "Retraction checks unavailable. Other results are still shown.";
     searchRetryToast = showToast(searchRetryMessage, {
-        tone: "error", duration: 0,
+        tone: "error", duration: 0, dismissOnAction: false,
         action: {label: "Retry", onClick: () => {
             if (location.href !== pageUrl || generation !== searchNavigationGeneration) {
                 if (generation === searchNavigationGeneration) dismissSearchRetry();
@@ -501,9 +502,10 @@ async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): 
 }
 
 async function retryFailedSearchChecks(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    retryingSearchChecks = true;
     const pageUrl = location.href;
     const generation = searchNavigationGeneration;
+    const queued = {page: pageUrl, generation};
+    retryingSearchChecks = queued;
     const navigated = () => location.href !== pageUrl || generation !== searchNavigationGeneration;
     const clickedSignal = workSignal();
     const wasCancelled = clickedSignal.aborted;
@@ -526,7 +528,7 @@ async function retryFailedSearchChecks(adapter: SearchSiteAdapter, root: ParentN
             }
         } finally { endWorkIndicator(); }
     } finally {
-        retryingSearchChecks = false;
+        if (retryingSearchChecks === queued) retryingSearchChecks = null;
         if (!navigated()) await updateSearchRetry(adapter, root);
     }
 }

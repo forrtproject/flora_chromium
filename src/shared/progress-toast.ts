@@ -837,6 +837,8 @@ export function showWorkIndicator(): void {
 export function _resetWorkIndicatorForTesting(): void {
     clearTimers();
     refCount = 0;
+    for (const resolve of idleWaiters) resolve();
+    idleWaiters.clear();
     endCancellableWork();
     progress = 0;
     labelText = DEFAULT_LABEL;

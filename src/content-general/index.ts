@@ -64,7 +64,7 @@ let pageNotices: RetractionResponse[] = [];
 const refNotices = new Map<DoiString, RetractionResponse>();
 const unavailableRetractionDois = new Set<DoiString>();
 let retractionRetryToast: HTMLElement | null = null;
-let retractionRetryQueued = false;
+let retractionRetryQueued: {page: string; generation: number; sheetGeneration: number} | null = null;
 function dismissRetractionRetry(): void {
     // Other provider alerts reuse this host; do not dismiss their newer message.
     if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
@@ -84,6 +84,7 @@ const processedDois = new Set<DoiString>();
 const seenDois = new SeenDois();
 const doiContext = new Map<DoiString, DoiContext>();
 let lastUrl = location.href;
+let pageGeneration = 0;
 let augmentAttempted = false;
 let articleFeedbacksFetched = false;
 let articlePubPeerUnavailable = false;
@@ -239,9 +240,11 @@ function reportNothingToFlag(dois: DoiString[], flagged: boolean): void {
 async function checkPageRetractions(dois: DoiString[]): Promise<RetractionResponse[]> {
     const passUrl = location.href;
     const generation = sheetFetchGen;
+    const checkedPageGeneration = pageGeneration;
+    const navigated = () => location.href !== passUrl || generation !== sheetFetchGen || checkedPageGeneration !== pageGeneration;
     const signal = activeWorkSignal();
     const stale = () => signal?.aborted || floraHidden || isWorkCancelled()
-        || location.href !== passUrl || generation !== sheetFetchGen;
+        || navigated();
     try {
         const notices = await retractionCheck(dois);
         if (stale()) return [];
@@ -259,21 +262,23 @@ async function checkPageRetractions(dois: DoiString[]): Promise<RetractionRespon
         }
         debugWarn("Retraction checks unavailable —", error);
         retractionRetryToast = showToast("Retraction checks unavailable. Other results are still shown.", {
-            tone: "error", duration: 0,
+            tone: "error", duration: 0, dismissOnAction: false,
             action: {label: "Retry", onClick: async () => {
-                if (floraHidden || location.href !== passUrl || generation !== sheetFetchGen) { dismissRetractionRetry(); return; }
-                if (retractionRetryQueued) return;
+                if (floraHidden || navigated()) { dismissRetractionRetry(); return; }
+                if (retractionRetryQueued?.page === passUrl && retractionRetryQueued.generation === checkedPageGeneration && retractionRetryQueued.sheetGeneration === generation) return;
                 const queuedSignal = activeWorkSignal();
                 const wasCancelled = queuedSignal?.aborted;
-                retractionRetryQueued = true;
+                const queued = {page: passUrl, generation: checkedPageGeneration, sheetGeneration: generation};
+                retractionRetryQueued = queued;
                 try { await waitForWorkToFinish(); }
-                finally { retractionRetryQueued = false; }
-                if (floraHidden || location.href !== passUrl || generation !== sheetFetchGen || (!wasCancelled && queuedSignal?.aborted)) return;
+                finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
+                if (floraHidden || navigated()) return;
+                if (!wasCancelled && queuedSignal?.aborted) return;
                 resumeAutomaticWork();
                 beginWorkIndicator({stages: ["notices"]});
                 try {
                     const recovered = await checkPageRetractions([...unavailableRetractionDois]);
-                    if (floraHidden || isWorkCancelled() || location.href !== passUrl || generation !== sheetFetchGen) return;
+                    if (floraHidden || isWorkCancelled() || navigated()) return;
                     for (const notice of recovered) refNotices.set(notice.originDoi, notice);
                     refreshRedacts();
                     if (isSheets) {
@@ -307,6 +312,7 @@ async function runScanPass(): Promise<void> {
     const sheetChanged = () => isSheets && (sheetGeneration !== sheetFetchGen || sheetIdentity !== currentSheetKey());
     if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
+        pageGeneration++;
         processedDois.clear();
         seenDois.clear();
         doiContext.clear();
@@ -321,6 +327,7 @@ async function runScanPass(): Promise<void> {
         refNotices.clear();
         lastResolvedReferences = [];
         unavailableRetractionDois.clear();
+        retractionRetryQueued = null;
         dismissRetractionRetry();
         pendingNothingToFlag = null;
         augmentAttempted = false;

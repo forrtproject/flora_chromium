@@ -285,6 +285,28 @@ it("keeps Retry for remaining unanswered rows but clears it after results are re
     expect(document.querySelectorAll('[data-flora-panel]')).toHaveLength(1);
 });
 
+it("keeps cancellation stopped but restores recovery after cancelling a queued Retry", async () => {
+    send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
+    retraction.mockRejectedValueOnce(new Error("Unavailable"));
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(document.querySelector("#flora-alert-toast button")).not.toBeNull());
+    const {beginWorkIndicator, endWorkIndicator, isWorkCancelled} = await import("../../src/shared/progress-toast");
+    beginWorkIndicator();
+    await vi.waitFor(() => expect(document.querySelector("[data-flora-work-cancel]")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    document.querySelector<HTMLButtonElement>("[data-flora-work-cancel]")!.click();
+    expect(isWorkCancelled()).toBe(true);
+    endWorkIndicator();
+    await vi.waitFor(() => expect(document.getElementById("flora-alert-toast")?.textContent).toContain("Retraction checks unavailable"));
+    expect(retraction).toHaveBeenCalledTimes(1);
+    const {canStartAutomaticWork} = await import("../../src/shared/work-cancellation");
+    expect(canStartAutomaticWork()).toBe(false);
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(2));
+    expect(document.getElementById("flora-alert-toast")).toBeNull();
+});
+
 it.each(["success", "failure"])("ignores stale notice %s after A → B → A without an intervening scan", async (outcome) => {
     send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
     let resolveOld!: (value: unknown) => void;
@@ -371,4 +393,25 @@ it("does not apply a queued shared Retry after A → B → A navigation", async 
     expect(augment).toHaveBeenCalledOnce();
     expect(document.getElementById("flora-alert-toast")).toBeNull();
     expect(document.querySelector("[data-flora-panel]")).toBeNull();
+});
+
+it("lets the new page queue recovery while an older page Retry is still unwinding", async () => {
+    send.mockResolvedValue({results: {}, errors: {}});
+    retraction.mockRejectedValueOnce(new Error("Page A unavailable"))
+        .mockRejectedValueOnce(new Error("Page B unavailable"));
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(document.querySelector("#flora-alert-toast button")).not.toBeNull());
+    const {beginWorkIndicator, endWorkIndicator} = await import("../../src/shared/progress-toast");
+    beginWorkIndicator();
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    history.pushState({}, "", "/new-search");
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(document.querySelector("#flora-alert-toast button")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    endWorkIndicator();
+    await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(document.getElementById("flora-alert-toast")).toBeNull());
+    expect(send).toHaveBeenCalledTimes(2);
 });

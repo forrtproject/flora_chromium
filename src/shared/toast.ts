@@ -127,6 +127,8 @@ export interface ToastOptions {
     /** Milliseconds before the toast fades. 0 keeps it up until it is replaced. */
     duration?: number;
     action?: ToastAction;
+    /** Keep asynchronous recovery available until its owner dismisses the alert. */
+    dismissOnAction?: boolean;
 }
 
 /**
@@ -169,7 +171,7 @@ export function showToast(message: string, options: ToastOptions = {}): HTMLElem
         button.style.cssText = ACTION_STYLE;
         button.addEventListener("click", () => {
             void action.onClick();
-            dismissAlertToast();
+            if (options.dismissOnAction !== false) dismissAlertToast();
         });
         host.appendChild(button);
 
