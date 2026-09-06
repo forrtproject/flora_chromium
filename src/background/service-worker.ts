@@ -432,6 +432,11 @@ async function handleSheetFetch(
                 error: `HTTP ${resp.status}`
             };
         }
+        // Access failures can redirect to a sign-in/error document with HTTP 200.
+        // Inspect its media type rather than rejecting legitimate HTML-looking CSV cells.
+        if (resp.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "text/html") {
+            return {type: "FLORA_SHEET_FETCH_RESULT", csv: null, error: "Sheet export returned a sign-in or error page"};
+        }
         const csv = await resp.text();
         return {type: "FLORA_SHEET_FETCH_RESULT", csv, error: null};
     } catch (err) {
