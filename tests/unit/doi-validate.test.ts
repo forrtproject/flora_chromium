@@ -90,6 +90,22 @@ describe("validateDOI", () => {
     expect(cachedDois()).not.toContain("10.1038/nature12373");
   });
 
+  it.each([2, 200, 999, undefined, "1"])(
+    "leaves responseCode %s unknown, uncached, and eligible for retry",
+    async (responseCode) => {
+      let calls = 0;
+      server.use(http.get(HANDLE_PATTERN, () => {
+        calls++;
+        return HttpResponse.json(calls === 1 ? { responseCode } : { responseCode: 1 });
+      }));
+      const target = doi("10.1038/retry");
+      expect((await validateDOIs([target])).has(target)).toBe(false);
+      expect(cachedDois()).not.toContain(target);
+      expect((await validateDOIs([target])).get(target)).toBe(true);
+      expect(calls).toBe(2);
+    },
+  );
+
   it("records a DOI invalid on HTTP 404", async () => {
     server.use(
       http.get(HANDLE_PATTERN, () => new HttpResponse(null, { status: 404 }))
