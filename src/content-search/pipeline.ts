@@ -18,7 +18,7 @@ import {applyPlacement} from "@shared/site-adapters";
 import {showToast} from "@shared/toast";
 import {isSetupComplete} from "@shared/settings";
 import {fetchOpenAccess} from "@shared/openaccess";
-import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {activeWorkSignal, beginCancellableWork, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
@@ -62,6 +62,14 @@ export async function retryUnansweredSearchResults(adapter: SearchSiteAdapter, r
 // only one source would drop whatever the other had already resolved.
 const lookupState = new Map<DoiString, LookupState>();
 const retractions = new Map<DoiString, RetractionResponse>();
+const unavailableRetractionDois = new Set<DoiString>();
+let retractionRetryToast: HTMLElement | null = null;
+function dismissRetractionRetry(): void {
+    // Other provider alerts reuse this host; do not dismiss their newer message.
+    if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
+    retractionRetryToast = null;
+}
+let retractionPage = location.href;
 
 function refreshBadges(): void {
     updateIndicatorPillBadges(document, lookupState, [...retractions.values()], "panels");
@@ -92,6 +100,11 @@ const pendingPasses = new Map<SearchSiteAdapter, Map<ParentNode, Promise<void>>>
  *  indicator across the batch — extraction through to badges. Passes run one
  *  at a time, in call order. */
 export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
+    if (retractionPage !== location.href) {
+        retractionPage = location.href;
+        unavailableRetractionDois.clear();
+        dismissRetractionRetry();
+    }
     if (!canStartAutomaticWork()) return Promise.resolve();
     let pending = pendingPasses.get(adapter);
     if (!pending) pendingPasses.set(adapter, pending = new Map());
@@ -436,6 +449,51 @@ function workItem(id: string, label: string, detail?: string): WorkItem {
     return {id, label: stripTypeTags(label) || id, detail, status: "pending"};
 }
 
+/** Retry only the unavailable notice lookups; already placed rows stay intact. */
+async function checkSearchRetractions(dois: DoiString[]): Promise<RetractionResponse[]> {
+    const passUrl = location.href;
+    if (retractionPage !== passUrl) {
+        retractionPage = passUrl;
+        unavailableRetractionDois.clear();
+        dismissRetractionRetry();
+    }
+    const signal = activeWorkSignal();
+    const stale = () => signal?.aborted || searchHidden || isWorkCancelled() || location.href !== passUrl;
+    try {
+        const notices = await retractionCheck(dois);
+        if (stale()) return [];
+        for (const doi of dois) unavailableRetractionDois.delete(doi);
+        if (unavailableRetractionDois.size === 0) dismissRetractionRetry();
+        return notices;
+    } catch (error) {
+        if (stale()) return [];
+        for (const doi of dois) unavailableRetractionDois.add(doi);
+        if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+            showToast("ORE was updated — reload this page to run checks.", {
+                action: {label: "Reload", onClick: () => location.reload()},
+            });
+            return [];
+        }
+        debugWarn("Retraction checks unavailable —", error);
+        retractionRetryToast = showToast("Retraction checks unavailable. Other results are still shown.", {
+            tone: "error", duration: 0,
+            action: {label: "Retry", onClick: async () => {
+                if (searchHidden || location.href !== passUrl) { dismissRetractionRetry(); return; }
+                resumeAutomaticWork();
+                beginCancellableWork();
+                beginWorkIndicator({stages: ["notices"]});
+                try {
+                    const recovered = await checkSearchRetractions([...unavailableRetractionDois]);
+                    if (searchHidden || isWorkCancelled() || location.href !== passUrl) return;
+                    for (const notice of recovered) retractions.set(notice.originDoi, notice);
+                    refreshBadges();
+                } finally { endWorkIndicator(); }
+            }},
+        });
+        return [];
+    }
+}
+
 /** Build the row's panel, place it per the adapter, then fetch its retraction status. */
 async function placePanel(
     adapter: SearchSiteAdapter,
@@ -457,7 +515,7 @@ async function placePanel(
         if (!applyPlacement(adapter.panelPlacement, row, panel, `${adapter.label} panel`)) {
             row.appendChild(panel);
         }
-        const notices = await retractionCheck([doi]);
+        const notices = await checkSearchRetractions([doi]);
         if (notices?.[0]) {
             retractions.set(doi, notices[0]);
             refreshBadges();

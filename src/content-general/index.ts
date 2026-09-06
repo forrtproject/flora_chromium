@@ -1,4 +1,4 @@
-import {activeWorkSignal} from "@shared/work-cancellation";
+import {activeWorkSignal, beginCancellableWork} from "@shared/work-cancellation";
 import {
     beginDomScanPass,
     classifyPageDois,
@@ -61,6 +61,13 @@ const pageState = new Map<DoiString, LookupState>();
 let redacts: RetractionResponse[] = [];
 let pageNotices: RetractionResponse[] = [];
 const refNotices = new Map<DoiString, RetractionResponse>();
+const unavailableRetractionDois = new Set<DoiString>();
+let retractionRetryToast: HTMLElement | null = null;
+function dismissRetractionRetry(): void {
+    // Other provider alerts reuse this host; do not dismiss their newer message.
+    if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
+    retractionRetryToast = null;
+}
 function refreshRedacts(): void {
     const onPage = new Set(pageNotices.map((n) => n.originDoi));
     redacts = [...pageNotices, ...[...refNotices.values()].filter((n) => !onPage.has(n.originDoi))];
@@ -68,6 +75,7 @@ function refreshRedacts(): void {
 // Reference resolution still running after the pass that started it, and the
 // "nothing to flag" verdict it must complete before that toast is shown.
 let refsPending = 0;
+let lastResolvedReferences: ResolvedReference[] = [];
 let pendingNothingToFlag: {dois: DoiString[]; flagged: boolean} | null = null;
 // Keep memory of detected DOIs to track dynamic page changes
 const processedDois = new Set<DoiString>();
@@ -219,10 +227,67 @@ let nothingToFlagReportedFor: string | null = null;
 
 function reportNothingToFlag(dois: DoiString[], flagged: boolean): void {
     const examined = new Set(dois).size;
-    if (examined === 0 || flagged || dois.some(doi => pageState.get(doi)?.status === "error")) return;
+    if (examined === 0 || flagged || unavailableRetractionDois.size > 0 || dois.some(doi => pageState.get(doi)?.status === "error")) return;
     if (nothingToFlagReportedFor === location.href) return;
     nothingToFlagReportedFor = location.href;
     showToast(`Checked ${count(examined, "paper")} — no flags in available results`, {tone: "success"});
+}
+
+/** Preserve unavailable checks for an explicit retry, independently of DOI scan markers. */
+async function checkPageRetractions(dois: DoiString[]): Promise<RetractionResponse[]> {
+    const passUrl = location.href;
+    const generation = sheetFetchGen;
+    const signal = activeWorkSignal();
+    const stale = () => signal?.aborted || floraHidden || isWorkCancelled()
+        || location.href !== passUrl || generation !== sheetFetchGen;
+    try {
+        const notices = await retractionCheck(dois);
+        if (stale()) return [];
+        for (const doi of dois) unavailableRetractionDois.delete(doi);
+        if (unavailableRetractionDois.size === 0) dismissRetractionRetry();
+        return notices;
+    } catch (error) {
+        if (stale()) return [];
+        for (const doi of dois) unavailableRetractionDois.add(doi);
+        if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+            showToast("ORE was updated — reload this page to run checks.", {
+                action: {label: "Reload", onClick: () => location.reload()},
+            });
+            return [];
+        }
+        debugWarn("Retraction checks unavailable —", error);
+        retractionRetryToast = showToast("Retraction checks unavailable. Other results are still shown.", {
+            tone: "error", duration: 0,
+            action: {label: "Retry", onClick: async () => {
+                if (floraHidden || location.href !== passUrl || generation !== sheetFetchGen) { dismissRetractionRetry(); return; }
+                resumeAutomaticWork();
+                beginCancellableWork();
+                beginWorkIndicator({stages: ["notices"]});
+                try {
+                    const recovered = await checkPageRetractions([...unavailableRetractionDois]);
+                    if (floraHidden || isWorkCancelled() || location.href !== passUrl || generation !== sheetFetchGen) return;
+                    for (const notice of recovered) refNotices.set(notice.originDoi, notice);
+                    refreshRedacts();
+                    if (isSheets) {
+                        const matched = [...pageState.entries()].flatMap(([doi, state]) =>
+                            state.status === "matched" ? [{doi, result: state.result}] : []);
+                        if (!isSheetsModalSuppressed()) renderSheetsModal(matched, redacts, sheetsModalCallbacks);
+                    } else {
+                        placeTitleNoticePill();
+                        for (const pill of document.querySelectorAll<HTMLElement>(`.${INDICATOR_PILL_CLASS}`)) {
+                            const notice = recovered.find(n => n.originDoi === pill.getAttribute("data-flora-doi"));
+                            if (notice) injectRetractionInfo(pill, notice, {afterend: true});
+                        }
+                        injectInlineRetractionPills(extractDoiOccurrences(document), new Map(redacts.map(n => [n.originDoi, n])));
+                        updateIndicatorPillBadges(document, pageState, redacts);
+                        lastRenderedPageStateVersion = -1;
+                        await checkPubPeer(Promise.resolve(lastResolvedReferences));
+                    }
+                } finally { endWorkIndicator(); }
+            }},
+        });
+        return [];
+    }
 }
 
 async function runScanPass(): Promise<void> {
@@ -246,6 +311,9 @@ async function runScanPass(): Promise<void> {
         redacts = [];
         pageNotices = [];
         refNotices.clear();
+        lastResolvedReferences = [];
+        unavailableRetractionDois.clear();
+        dismissRetractionRetry();
         pendingNothingToFlag = null;
         augmentAttempted = false;
         resetRetractionPills();
@@ -325,7 +393,7 @@ async function runScanPass(): Promise<void> {
     // references when their DOIs arrive.
     if (hasDoiChange && dois.length > 0) {
         reportWorkStage("notices", `Checking ${count(dois.length, "DOI")} for retractions…`);
-        const notices = await retractionCheck(dois);
+        const notices = await checkPageRetractions(dois);
         if (sheetChanged()) return;
         pageNotices = notices;
         refreshRedacts();
@@ -516,11 +584,12 @@ function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<Re
                 releaseReferenceEntries(resolvedRefs);
                 return [];
             }
+            lastResolvedReferences = resolvedRefs;
             let notices: RetractionResponse[] = [];
             if (resolvedRefs.length > 0) {
                 try {
                     reportWorkStage("notices", `Checking ${count(resolvedRefs.length, "reference")} for retractions…`);
-                    notices = await retractionCheck([...new Set(resolvedRefs.map((r) => r.doi))]);
+                    notices = await checkPageRetractions([...new Set(resolvedRefs.map((r) => r.doi))]);
                     for (const n of notices) refNotices.set(n.originDoi, n);
                     refreshRedacts();
                     reportWorkStage("notices", `Marking up ${count(resolvedRefs.length, "reference")}…`);
@@ -655,7 +724,7 @@ async function augmentFromTitle(): Promise<void> {
             // for this path. Pill it beside the title here instead.
             if (titleEl && !document.querySelector(`.${INDICATOR_PILL_CLASS}[data-flora-title-pill]`)) {
                 try {
-                    const notices = await retractionCheck([resolvedDoi]);
+                    const notices = await checkPageRetractions([resolvedDoi]);
                     // Same marker as placeTitleIndicatorPill so neither path double-pills.
                     const pill = createIndicatorPill({
                         doi: resolvedDoi,

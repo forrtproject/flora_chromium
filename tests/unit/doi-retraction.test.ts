@@ -67,7 +67,7 @@ describe("doi retraction content helper", () => {
         expect(second).toEqual([]);
     });
 
-    it("returns no retractions for unexpected responses", async () => {
+    it("rejects unexpected responses instead of treating them as no notices", async () => {
         (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockResolvedValue({
             type: "FLORA_LOOKUP_RESULT",
             results: {},
@@ -75,7 +75,17 @@ describe("doi retraction content helper", () => {
         });
 
         const {retractionCheck} = await import("../../src/shared/doi-retraction");
-        await expect(retractionCheck([doi("10.1038/nature12373")])).resolves.toEqual([]);
+        await expect(retractionCheck([doi("10.1038/nature12373")])).rejects.toThrow("unavailable");
+    });
+
+    it("preserves a worker error and allows the next attempt to confirm no notices", async () => {
+        vi.mocked(chrome.runtime.sendMessage)
+            .mockResolvedValueOnce({type: "FLORA_RET_CHECK_RESULT", results: [], error: "Retraction data unavailable"})
+            .mockResolvedValueOnce({type: "FLORA_RET_CHECK_RESULT", results: []});
+        const {retractionCheck} = await import("../../src/shared/doi-retraction");
+        await expect(retractionCheck([doi("10.1234/paper")])).rejects.toThrow("Retraction data unavailable");
+        await expect(retractionCheck([doi("10.1234/paper")])).resolves.toEqual([]);
+        expect(chrome.runtime.sendMessage).toHaveBeenCalledTimes(2);
     });
 
     it("gives up on a worker that never answers so the pass can continue", async () => {
@@ -84,8 +94,9 @@ describe("doi retraction content helper", () => {
             (chrome.runtime.sendMessage as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
             const {retractionCheck, RETRACTION_CHECK_TIMEOUT_MS} = await import("../../src/shared/doi-retraction");
             const pending = retractionCheck([doi("10.1038/nature12373")]);
+            const assertion = expect(pending).rejects.toThrow("timed out");
             await vi.advanceTimersByTimeAsync(RETRACTION_CHECK_TIMEOUT_MS + 1);
-            await expect(pending).resolves.toEqual([]);
+            await assertion;
         } finally {
             vi.useRealTimers();
         }
