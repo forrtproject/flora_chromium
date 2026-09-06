@@ -52,10 +52,14 @@ describe("Open Access request sharing", () => {
         vi.stubGlobal("fetch", fetchMock);
         const old = fetchOpenAccess("10.1000/email");
         await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-        settings.email = "corrected@example.org";
-        expect(await fetchOpenAccess("10.1000/email")).toMatchObject({isOa: false});
-        expect(new URL(fetchMock.mock.calls[1][0]).searchParams.get("email")).toBe(settings.email);
-        finishOld(new Response(null, {status: 422}));
+        try {
+            settings.email = "corrected@example.org";
+            expect(await fetchOpenAccess("10.1000/email")).toMatchObject({isOa: false});
+            expect(new URL(fetchMock.mock.calls[1][0]).searchParams.get("email")).toBe(settings.email);
+        } finally {
+            finishOld(new Response(null, {status: 422}));
+            await old;
+        }
         expect(await old).toBeNull();
     });
 });
