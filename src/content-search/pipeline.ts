@@ -15,6 +15,7 @@ import type {DoiString, DoiSource, LookupState, RetractionResponse} from "@share
 import type {LookupRequest, LookupResponse} from "@shared/messages";
 import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator-pill";
 import {applyPlacement} from "@shared/site-adapters";
+import {showToast} from "@shared/toast";
 import {fetchOpenAccess} from "@shared/openaccess";
 import {
     beginWorkIndicator,
@@ -292,7 +293,16 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     try {
         const response = await safeSendMessage<LookupResponse>(request);
         if (!response) {
-            for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "Extension unavailable"});
+            // This script belongs to an extension version that has been replaced.
+            // Provider retry cannot reconnect it; remove incomplete panels and explain recovery.
+            for (const doi of uniqueDois) lookupState.delete(doi);
+            for (const {row} of resolved) {
+                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                row.removeAttribute(PROCESSED_ATTR);
+            }
+            if (!searchHidden && !isWorkCancelled()) showToast("ORE was updated — reload this page to run checks.", {
+                action: {label: "Reload", onClick: () => location.reload()},
+            });
             return;
         }
         debugLog(`${label}: Lookup response:`, Object.keys(response.results).length, "results,", Object.keys(response.errors).length, "errors");

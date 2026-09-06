@@ -200,15 +200,18 @@ async function waitForSettle(page: Page): Promise<void> {
   let stableSince = Date.now();
 
   for (;;) {
-    const count = await page.evaluate((sel) => document.querySelectorAll(sel).length, FLORA_SELECTOR);
+    const {count, working} = await page.evaluate((sel) => ({
+      count: document.querySelectorAll(sel).length,
+      working: !!document.getElementById("flora-working-toast"),
+    }), FLORA_SELECTOR);
     const elapsed = Date.now() - start;
     if (count !== lastCount) {
       lastCount = count;
       stableSince = Date.now();
     }
     const stable = Date.now() - stableSince >= stableMs;
-    if (elapsed >= minMs && stable) break;
-    if (elapsed >= maxMs) break;
+    if (elapsed >= minMs && stable && !working) break;
+    if (elapsed >= maxMs) throw new Error("FLoRA rendering did not settle before capture");
     await new Promise((r) => setTimeout(r, pollMs));
   }
   // Final short settle so any last paint/layout lands before capture.
