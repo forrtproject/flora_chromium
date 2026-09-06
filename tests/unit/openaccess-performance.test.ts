@@ -1,3 +1,4 @@
+import {beginCancellableWork, cancelWork, endCancellableWork} from "../../src/shared/work-cancellation";
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest";
 import {fetchOpenAccess, _resetOpenAccessCacheForTesting} from "../../src/shared/openaccess";
 
@@ -9,7 +10,7 @@ beforeEach(() => {
     _resetOpenAccessCacheForTesting();
     vi.mocked(chrome.storage.local.get).mockResolvedValue({});
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { endCancellableWork(); vi.unstubAllGlobals(); });
 
 describe("Open Access request sharing", () => {
     it("uses one request per DOI and caps simultaneous requests on a repeated bibliography", async () => {
@@ -30,6 +31,23 @@ describe("Open Access request sharing", () => {
         expect(results.every(result => result?.isOa === false)).toBe(true);
         expect(requests).toBe(10);
         expect(maxActive).toBe(4);
+    });
+
+    it("cancels shared scan requests after the indicator ends and allows a fresh retry", async () => {
+        const fetchMock = vi.fn().mockImplementationOnce((_url, init: RequestInit) =>
+            new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason))))
+            .mockResolvedValueOnce(new Response(JSON.stringify({is_oa: false})));
+        vi.stubGlobal("fetch", fetchMock);
+        beginCancellableWork();
+        const first = fetchOpenAccess("10.1000/cancel");
+        const shared = fetchOpenAccess("10.1000/cancel");
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        endCancellableWork();
+        cancelWork();
+        expect(await Promise.all([first, shared])).toEqual([null, null]);
+        beginCancellableWork();
+        expect(await fetchOpenAccess("10.1000/cancel")).toMatchObject({isOa: false});
+        expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("shares a failed request but lets an explicit retry reach the provider", async () => {
