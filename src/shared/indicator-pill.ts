@@ -170,13 +170,13 @@ function makeDivider(): HTMLElement {
 // Inline segments — dimmed/lit status glyphs only, no direct interaction.
 // ──────────────────────────────────────────────
 
-function buildOaSegment(oa: OpenAccessStatus | null): HTMLElement {
-    const available = !!oa?.isOa;
+function buildOaSegment(state: OaState): HTMLElement {
+    const available = typeof state === "object" && !!state?.isOa;
     const el = document.createElement("span");
     el.setAttribute("data-flora-oa-segment", "");
     el.style.cssText = `display:inline-flex;align-items:center;line-height:0;color:#fff;opacity:${available ? "1" : "0.35"};`;
     el.innerHTML = OA_UNLOCK_SVG;
-    el.title = available ? "Open Access — free full text available" : "Open Access status unavailable";
+    el.title = `Open Access — ${oaSubtitle(state, available)}`;
     return shieldFromPageCss(el);
 }
 
@@ -802,7 +802,7 @@ interface IndicatorRowsOptions {
     replicationsCount: number | null;
     reproductionsCount: number | null;
     /** Called when the async lookup lands, so a caller can mirror it elsewhere. */
-    onOa?: (oa: OpenAccessStatus | null) => void;
+    onOa?: (state: OaState) => void;
     onPubPeer?: (feedback: PubPeerFeedback | null, answered: boolean | "pending") => void;
     /** Single-line rows and tighter metrics, for the always-visible panel. */
     compact?: boolean;
@@ -827,18 +827,18 @@ function buildIndicatorRows(opts: IndicatorRowsOptions): HTMLElement {
 
     let oaRow = buildOaRow(opts.oaStatus ? "pending" : null, compact, () => retryOa());
     rows.appendChild(oaRow);
-    const settleOa = (state: OaState, oa: OpenAccessStatus | null): void => {
+    const settleOa = (state: OaState): void => {
         const resolved = shieldFromPageCss(buildOaRow(state, compact, retryOa));
         replaceIndicatorRow(oaRow, resolved);
         oaRow = resolved;
-        opts.onOa?.(oa);
+        opts.onOa?.(state);
     };
     const loadOa = (request: Promise<OpenAccessStatus | null>): void => {
-        void request.then(async oa => settleOa(oa ?? (await hasContactEmail() ? null : "no-email"), oa))
-            .catch(() => settleOa(null, null));
+        void request.then(async oa => settleOa(oa ?? (await hasContactEmail() ? null : "no-email")))
+            .catch(() => settleOa(null));
     };
     const retryOa = (): void => {
-        settleOa("pending", null);
+        settleOa("pending");
         loadOa(fetchOpenAccess(opts.doi));
     };
     if (opts.oaStatus) loadOa(opts.oaStatus);
@@ -959,7 +959,7 @@ export function createIndicatorPill(options: IndicatorPillOptions): HTMLElement 
 
     // Segment 2 — Open Access padlock (async).
     pill.appendChild(makeDivider());
-    let oaSegment = buildOaSegment(null);
+    let oaSegment = buildOaSegment(oaStatus ? "pending" : null);
     pill.appendChild(oaSegment);
 
     // Segment 3 — PubPeer marker (async, fetched internally so callers don't
