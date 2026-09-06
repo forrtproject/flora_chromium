@@ -836,7 +836,8 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         lastRenderedPageStateVersion = pageStateVersion;
         renderSidePanel(article.feedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle,
             article.unavailable ? async () => {
-                if (location.href !== passUrl) return;
+                if (floraHidden || location.href !== passUrl) return;
+                resumeAutomaticWork();
                 articleFeedbacksFetched = false;
                 beginWorkIndicator({stages: ["scan"]});
                 try { await checkPubPeer(Promise.resolve(resolvedRefs)); }
