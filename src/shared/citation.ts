@@ -268,7 +268,7 @@ async function requestCitation(doi: string, format: CitationFormat): Promise<Cit
     let reachable = false;
     for (const url of [crossrefUrl(doi, email), doiOrgUrl(doi)]) {
         try {
-            const response = await fetchWithDeadline(url, {headers: {Accept: format.accept}});
+            const response = await fetchWithDeadline(url, {signal: null, headers: {Accept: format.accept}});
             if (response.status < 500) reachable = true;
             if (!response.ok) continue;
             const raw = await response.text();

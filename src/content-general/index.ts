@@ -1,3 +1,4 @@
+import {activeWorkSignal} from "@shared/work-cancellation";
 import {
     beginDomScanPass,
     classifyPageDois,
@@ -731,11 +732,13 @@ function extractPageAugmentationMetadata(doc: Document): Omit<DoiAugmentRequest,
 }
 
 async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): Promise<void> {
+    const signal = activeWorkSignal();
     if (isSheets) return;
     const primaryDoi = extractPrimaryDOI(document);
     if (!primaryDoi) return;
     try {
         const resolvedRefs = refsPromise ? await refsPromise : [];
+        if (signal?.aborted) return;
 
         // Union resolved refs with on-page reference DOIs for full PubPeer coverage.
         const seen = new Set<DoiString>();
@@ -759,12 +762,13 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         // Article: URL lookup once/page. References: one batched, cached lookup.
         const articlePromise = articleFeedbacksFetched
             ? Promise.resolve(lastArticleFeedbacks)
-            : lookupPubPeer([primaryDoi], [location.href]);
+            : lookupPubPeer([primaryDoi], [location.href], signal);
         const [articleFeedbacks, refFeedbackByDoi, articleTitle] = await Promise.all([
             articlePromise,
-            lookupPubPeerForDois(referenceDois),
-            fetchTitleByDoi(primaryDoi),
+            lookupPubPeerForDois(referenceDois, signal),
+            fetchTitleByDoi(primaryDoi, signal),
         ]);
+        if (signal?.aborted) return;
         articleFeedbacksFetched = true;
         lastArticleFeedbacks = articleFeedbacks;
         lastReferenceDoiKey = refKey;
@@ -786,11 +790,12 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         });
         const panelRefs = await Promise.all(flagged.map(async (doi) => {
             const title = refFeedbackByDoi.get(doi)?.title
-                ?? (await fetchTitleByDoi(doi))
+                ?? (await fetchTitleByDoi(doi, signal))
                 ?? doi;
             return {doi, title};
         }));
 
+        if (signal?.aborted) return;
         lastRenderedPageStateVersion = pageStateVersion;
         renderSidePanel(articleFeedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle);
     } catch (err) {

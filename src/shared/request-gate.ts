@@ -49,7 +49,7 @@ export class RequestGate {
     ) {}
 
     async fetch(url: string, init?: RequestInit): Promise<Response> {
-        const signal = init?.signal ?? activeWorkSignal() ?? new AbortController().signal;
+        const signal = (init?.signal === undefined ? activeWorkSignal() : init.signal) ?? new AbortController().signal;
         signal.throwIfAborted();
         await this.acquire(signal);
         try {

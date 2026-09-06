@@ -1,3 +1,4 @@
+import {beginCancellableWork, endCancellableWork, cancelWork} from "../../src/shared/work-cancellation";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   lookupPubPeerForDoi,
@@ -55,8 +56,24 @@ describe("lookupPubPeerForDoi batching", () => {
   });
 
   afterEach(() => {
+    endCancellableWork();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     _resetPubPeerCacheForTesting();
+  });
+
+  it("drops cancelled queued batches after the scan indicator ends", async () => {
+    vi.useFakeTimers();
+    beginCancellableWork();
+    const pending = lookupPubPeerForDoi("10.1234/a");
+    cancelWork();
+    endCancellableWork();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await pending).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const retry = lookupPubPeerForDoi("10.1234/a");
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await retry)?.total_comments).toBe(3);
   });
 
   it("coalesces concurrent single-DOI lookups into one request", async () => {

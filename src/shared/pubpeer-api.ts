@@ -1,4 +1,4 @@
-import {fetchWithDeadline} from "@shared/work-cancellation";
+import {activeWorkSignal, fetchWithDeadline} from "@shared/work-cancellation";
 import { debugLog } from "./debug";
 import { BlobCache } from "./blob-cache";
 import { getHiddenCommenters, isHiddenCommenter } from "./pubpeer-filter";
@@ -44,11 +44,13 @@ export class PubPeerRateLimitError extends Error {
 
 async function fetchPubPeer(
   dois: string[],
-  urls: string[]
+  urls: string[],
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
   const response = await fetchWithDeadline(
     "https://pubpeer.com/v3/publications?devkey=PubMedChrome",
     {
+      signal: signal ?? null,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -72,9 +74,10 @@ async function fetchPubPeer(
 
 export async function lookupPubPeer(
   dois: string[],
-  urls: string[]
+  urls: string[],
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
-  const feedbacks = await fetchPubPeer(dois, urls);
+  const feedbacks = await fetchPubPeer(dois, urls, signal);
   const hidden = await getHiddenCommenters();
   return feedbacks.map((feedback) => applyCommenterMutes(feedback, hidden));
 }
@@ -106,7 +109,8 @@ let rateLimitedUntil = 0;
  * Returns a Map containing only the DOIs PubPeer has a record for.
  */
 export async function lookupPubPeerForDois<T extends string>(
-  dois: T[]
+  dois: T[],
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<Map<T, PubPeerFeedback>> {
   const result = new Map<T, PubPeerFeedback>();
   if (dois.length === 0) return result;
@@ -140,7 +144,7 @@ export async function lookupPubPeerForDois<T extends string>(
   // 2. One batch call for all uncached DOIs.
   let feedbacks: PubPeerFeedback[] = [];
   try {
-    feedbacks = await fetchPubPeer(uncached.map(cacheKey), []);
+    feedbacks = await fetchPubPeer(uncached.map(cacheKey), [], signal);
   } catch (err) {
     if (err instanceof PubPeerRateLimitError) {
       rateLimitedUntil = now + err.retryAfterMs;
@@ -172,32 +176,41 @@ export async function lookupPubPeerForDois<T extends string>(
 // POSTs, all issued before any has written to the cache — so all of them miss
 // it and PubPeer 429s. Collect same-tick lookups into one batch.
 const BATCH_WINDOW_MS = 50;
-const pendingDois = new Map<string, Array<(fb: PubPeerFeedback | null) => void>>();
+type Batch = Map<string, Array<(fb: PubPeerFeedback | null) => void>>;
+// Keep each scan’s ownership across the batching delay and storage awaits.
+const pendingDois = new Map<AbortSignal | undefined, Batch>();
 let flushHandle: ReturnType<typeof setTimeout> | null = null;
 
 function flushPendingDois(): void {
   flushHandle = null;
   if (pendingDois.size === 0) return;
-  const batch = new Map(pendingDois);
+  const batches = new Map(pendingDois);
   pendingDois.clear();
 
-  const settle = (map: Map<string, PubPeerFeedback> | null) => {
-    for (const [doi, resolvers] of batch) {
-      const feedback = map?.get(doi) ?? null;
-      for (const resolve of resolvers) resolve(feedback);
-    }
-  };
-  lookupPubPeerForDois([...batch.keys()]).then(settle).catch(() => settle(null));
+  for (const [signal, batch] of batches) {
+    const settle = (map: Map<string, PubPeerFeedback> | null) => {
+      for (const [doi, resolvers] of batch) {
+        const feedback = map?.get(doi) ?? null;
+        for (const resolve of resolvers) resolve(feedback);
+      }
+    };
+    if (signal?.aborted) { settle(null); continue; }
+    lookupPubPeerForDois([...batch.keys()], signal).then(settle).catch(() => settle(null));
+  }
 }
 
 /** Resolves to null on miss or failure — callers render "no discussion" for both. */
 export function lookupPubPeerForDoi(doi: string): Promise<PubPeerFeedback | null> {
+  const signal = activeWorkSignal();
   return new Promise((resolve) => {
-    const waiting = pendingDois.get(doi);
+    if (signal?.aborted) { resolve(null); return; }
+    let batch = pendingDois.get(signal);
+    if (!batch) { batch = new Map(); pendingDois.set(signal, batch); }
+    const waiting = batch.get(doi);
     if (waiting) {
       waiting.push(resolve);
     } else {
-      pendingDois.set(doi, [resolve]);
+      batch.set(doi, [resolve]);
     }
     if (flushHandle === null) flushHandle = setTimeout(flushPendingDois, BATCH_WINDOW_MS);
   });
