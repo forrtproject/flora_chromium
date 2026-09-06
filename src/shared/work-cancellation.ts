@@ -1,6 +1,10 @@
 // Each content-script context owns its scan's cancellation signal.
 let controller = new AbortController();
 let started = false;
+let cancelledPage: string | null = null;
+/** Automatic passes stay stopped on this page until navigation or an explicit resume. */
+export const canStartAutomaticWork = (): boolean => cancelledPage !== location.href;
+export function resumeAutomaticWork(): void { cancelledPage = null; }
 export const activeWorkSignal = (): AbortSignal | undefined => started ? controller.signal : undefined;
 export const workSignal = (): AbortSignal => controller.signal;
 export function beginCancellableWork(): void {
@@ -9,6 +13,7 @@ export function beginCancellableWork(): void {
 }
 export function endCancellableWork(): void { started = false; }
 export function cancelWork(): void {
+  cancelledPage = location.href;
   controller.abort(new DOMException("Work cancelled", "AbortError"));
 }
 
