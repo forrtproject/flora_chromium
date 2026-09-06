@@ -44,7 +44,7 @@ import {createIndicatorPill, removeIndicatorPills, updateIndicatorPillBadges, IN
 import {applyPillStyle, applyPlacement, currentSiteAdapter} from "@shared/site-adapters";
 
 import {fetchOpenAccess} from "@shared/openaccess";
-import {showToast} from "@shared/toast";
+import {showToast, dismissToast} from "@shared/toast";
 import {resolveReferenceDois, renderResolvedReferences, releaseReferenceEntries, resetReferenceMarkers, type ResolvedReference} from "./references";
 import {fetchSheetCsv, parseSheetsUrl, sheetTabKey} from "./sheets";
 import {SeenDois} from "./seen-dois";
@@ -82,7 +82,6 @@ let lastRenderedPageStateVersion = -1;
 let sheetFetchGen = 0;
 // DOIs extracted from the full sheet CSV (populated asynchronously on Sheets)
 let sheetCsvDois: DoiString[] = [];
-let sheetCsvAvailable = false;
 // Sheet tabs where the user explicitly dismissed the modal (session only).
 const dismissedSheets = new Set<string>();
 // Timestamp until which all Sheets modals are snoozed.
@@ -208,7 +207,6 @@ async function scanWholePage(): Promise<void> {
 let nothingToFlagReportedFor: string | null = null;
 
 function reportNothingToFlag(examined: number, flagged: boolean): void {
-    if (isSheets && !sheetCsvAvailable) return; // visible cells are only a partial check
     if (examined === 0 || flagged) return;
     if (nothingToFlagReportedFor === location.href) return;
     nothingToFlagReportedFor = location.href;
@@ -218,6 +216,9 @@ function reportNothingToFlag(examined: number, flagged: boolean): void {
 async function runScanPass(): Promise<void> {
     // Detect full URL change (SPA navigation) — clear state
     const currentUrl = location.href;
+    const sheetGeneration = sheetFetchGen;
+    const sheetIdentity = isSheets ? currentSheetKey() : null;
+    const sheetChanged = () => isSheets && (sheetGeneration !== sheetFetchGen || sheetIdentity !== currentSheetKey());
     if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
         processedDois.clear();
@@ -247,7 +248,7 @@ async function runScanPass(): Promise<void> {
     reportWorkStage("scan", "Scanning this page for DOIs…");
 
     // Resolve reference-list DOIs in parallel with the FORRT lookup below.
-    const refsPromise = resolveReferenceDois();
+    const refsPromise = isSheets ? Promise.resolve([]) : resolveReferenceDois();
 
     // Non-Sheets: one classification scan (allDois). Sheets: canvas extractDOIs + CSV.
     let dois: DoiString[];
@@ -310,7 +311,9 @@ async function runScanPass(): Promise<void> {
     // references when their DOIs arrive.
     if (hasDoiChange && dois.length > 0) {
         reportWorkStage("notices", `Checking ${count(dois.length, "DOI")} for retractions…`);
-        pageNotices = await retractionCheck(dois);
+        const notices = await retractionCheck(dois);
+        if (sheetChanged()) return;
+        pageNotices = notices;
         refreshRedacts();
         // A noticed DOI gets one labelled pill, at its most prominent
         // occurrence. The title outranks any mention in the body, so the
@@ -375,11 +378,13 @@ async function runScanPass(): Promise<void> {
             reportWorkStage("lookup", `Looking up ${count(newDois.length, "DOI")} in FLoRA…`);
             response = await safeSendMessage<LookupResponse>(request);
         } catch (err) {
+            if (sheetChanged()) return;
             debugError("Replication lookup failed:", err);
             if (!isSheets) placeTitleIndicatorPill();
             renderErrorBanner("Couldn't load replication data for this page");
             return;
         }
+        if (sheetChanged()) return;
         if (!response) {
             // Extension context invalidated (reload/update) — stale script, stop quietly.
             if (!isSheets) placeTitleIndicatorPill();
@@ -834,12 +839,10 @@ async function fetchSheetDois(): Promise<void> {
         const csv = await fetchSheetCsv(parsed);
         if (!isCurrent()) return;
         sheetCsvDois = extractDOIsFromText(csv);
-        sheetCsvAvailable = true;
         debugLog(`Sheets: CSV export found ${sheetCsvDois.length} DOIs`);
     } catch (err) {
         if (!isCurrent()) return;
         sheetCsvDois = [];
-        sheetCsvAvailable = false;
         unavailable = true;
         debugWarn("Sheets: full-tab export unavailable — checking visible cells only", err);
     }
@@ -913,11 +916,11 @@ async function fetchSheetDois(): Promise<void> {
                     debugLog("Sheets: tab change detected:", nowSheet, "— re-fetching…");
                     sheetFetchGen++;
                     sheetCsvDois = [];
-                    sheetCsvAvailable = false;
                     processedDois.clear();
                     seenDois.clear();
                     pageState.clear();
                     removeSheetsModal();
+                    dismissToast();
                     fetchSheetDois();
                 }
             }, 1500);
