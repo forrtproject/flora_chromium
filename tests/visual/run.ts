@@ -90,11 +90,11 @@ const FIXTURES: Fixture[] = [
   { name: "long-article-sticky", urlPath: "long-article-sticky.html" },
   { name: "shared-block-anchor", urlPath: "shared-block-anchor.html" },
   { name: "publisher-styled-link-row", urlPath: "publisher-styled-link-row.html" },
+  { name: "doi-in-href", urlPath: "doi-in-href-reflist.html" },
+  { name: "doi-in-text", urlPath: "doi-in-text-reflist.html" },
   // Reused unit-test fixtures (served from tests/fixtures).
   { name: "article-with-dois", urlPath: "article-with-dois.html" },
-  { name: "doi-in-href", urlPath: "doi-in-href-reflist.html" },
   { name: "doi-in-table", urlPath: "doi-in-table.html" },
-  { name: "doi-in-text", urlPath: "doi-in-text-reflist.html" },
   { name: "retracted", urlPath: "retracted.html" },
 ];
 
