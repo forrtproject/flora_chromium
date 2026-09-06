@@ -848,6 +848,10 @@ function parseSheetsUrl(url: string): {
 async function fetchSheetDois(): Promise<void> {
     const parsed = parseSheetsUrl(location.href);
     if (!parsed) return;
+    await waitUntilVisible();
+    const current = parseSheetsUrl(location.href);
+    if (floraHidden || !canStartAutomaticWork() || !current ||
+        current.spreadsheetId !== parsed.spreadsheetId || current.gid !== parsed.gid) return;
 
     const myGen = sheetFetchGen;
     const request: SheetFetchRequest = {
