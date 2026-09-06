@@ -50,14 +50,16 @@ let searchRequiresReload = false;
 
 export async function retryUnansweredSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
     // Settings can change while the initial lookup is still finishing.
+    const generation = searchNavigationGeneration;
     await passQueue;
+    if (generation !== searchNavigationGeneration) return;
     for (const row of root.querySelectorAll<HTMLElement>(adapter.resultRow)) {
         if (!unansweredRows.has(row)) continue;
         unansweredRows.delete(row);
         row.removeAttribute(PROCESSED_ATTR);
     }
     if (!searchHidden && canStartAutomaticWork()) await processSearchResults(adapter, root);
-    await updateSearchRetry(adapter, root);
+    if (generation === searchNavigationGeneration) await updateSearchRetry(adapter, root);
 }
 
 // Replication results and retraction notices arrive from two independent async
@@ -67,6 +69,29 @@ const lookupState = new Map<DoiString, LookupState>();
 const retractions = new Map<DoiString, RetractionResponse>();
 const unavailableRetractionDois = new Set<DoiString>();
 let retractionPage = location.href;
+let searchNavigationGeneration = 0;
+function clearResultRow(row: HTMLElement): void {
+    row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+    row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
+        if (!target.hasChildNodes()) target.remove();
+    });
+    row.removeAttribute(PROCESSED_ATTR);
+}
+
+function syncRetractionPage(): void {
+    if (retractionPage === location.href) return;
+    retractionPage = location.href;
+    searchNavigationGeneration++;
+    unavailableRetractionDois.clear();
+    lookupState.clear();
+    retractions.clear();
+    for (const row of document.querySelectorAll<HTMLElement>(`[${PROCESSED_ATTR}]`)) clearResultRow(row);
+    unansweredRows = new WeakSet();
+    dismissSearchRetry();
+}
+// Available since Chrome 102. Unlike a content-world history patch, this sees
+// the page's pushState/replaceState calls, even A → B → A between scan passes.
+(window as Window & {navigation?: EventTarget}).navigation?.addEventListener("currententrychange", syncRetractionPage);
 
 function refreshBadges(): void {
     updateIndicatorPillBadges(document, lookupState, [...retractions.values()], "panels");
@@ -97,15 +122,7 @@ const pendingPasses = new Map<SearchSiteAdapter, Map<ParentNode, Promise<void>>>
  *  indicator across the batch — extraction through to badges. Passes run one
  *  at a time, in call order. */
 export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    if (retractionPage !== location.href) {
-        retractionPage = location.href;
-        unavailableRetractionDois.clear();
-        for (const row of root.querySelectorAll<HTMLElement>(adapter.resultRow)) {
-            if (unansweredRows.has(row)) row.removeAttribute(PROCESSED_ATTR);
-        }
-        unansweredRows = new WeakSet();
-        dismissSearchRetry();
-    }
+    syncRetractionPage();
     if (!canStartAutomaticWork()) return Promise.resolve();
     let pending = pendingPasses.get(adapter);
     if (!pending) pendingPasses.set(adapter, pending = new Map());
@@ -139,19 +156,14 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
     debugLog(`${adapter.label}: ${rows.length} new result row(s) to process`);
     if (rows.length === 0) return;
 
+    const generation = searchNavigationGeneration;
     beginWorkIndicator({stages: ["scan", "validate", "augment", "lookup", "report"]});
     try {
         await runPass(adapter, rows);
     } finally {
-        if (isWorkCancelled()) {
+        if (generation === searchNavigationGeneration && isWorkCancelled()) {
             // A panel is placed before its lookup completes; it is not evidence of completion.
-            for (const row of rows) {
-                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
-                row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
-                    if (!target.hasChildNodes()) target.remove();
-                });
-                row.removeAttribute(PROCESSED_ATTR);
-            }
+            for (const row of rows) clearResultRow(row);
         }
         endWorkIndicator();
     }
@@ -170,11 +182,14 @@ interface ResolvedRow {
 
 async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>): Promise<void> {
     const {label} = adapter;
+    const generation = searchNavigationGeneration;
+    const navigated = () => generation !== searchNavigationGeneration;
     reportWorkStage("scan", `Reading ${count(rows.length, `${label} result`)}…`);
 
     const resolved: ResolvedRow[] = [];
     let hasUnansweredTitles = false;
     const place = (info: RowInfo, doi: DoiString, source: DoiSource, isAugmented: boolean, provenanceLabel?: string): void => {
+        if (navigated()) return;
         resolved.push({row: info.row, title: info.title, doi, source});
         void placePanel(adapter, info.row, doi, isAugmented, provenanceLabel);
     };
@@ -213,6 +228,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         } catch (err) {
             debugWarn(`${label}: id resolution failed for ${withSiteId.length} row(s) —`, err);
         }
+        if (navigated()) return;
         for (const info of withSiteId) {
             const doi = bySiteId.get(info.siteId!) ?? null;
             updateWorkItem(info.siteId!, doi ? "done" : "failed", doi ?? "no DOI on record");
@@ -239,6 +255,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         } catch (err) {
             debugWarn(`${label}: validation failed for ${doisToValidate.length} DOI(s) —`, err);
         }
+        if (navigated()) return;
         for (const doi of doisToValidate) {
             updateWorkItem(doi, validated.get(doi) ? "done" : "failed");
         }
@@ -256,6 +273,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     // ask once per distinct title, and give the toast one item for it.
     if (pending.length > 0) {
         const byTitle = new Map<string, RowInfo>();
+        if (navigated()) return;
         for (const info of pending) {
             if (info.title && !byTitle.has(info.title)) byTitle.set(info.title, info);
         }
@@ -269,14 +287,9 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             try {
                 augmented = await augmentDOIsViaWorker(requests);
             } catch (err) {
+                if (navigated()) return;
                 if (isContextInvalidated(err)) {
-                    for (const row of rows) {
-                        row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
-                        row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
-                            if (!target.hasChildNodes()) target.remove();
-                        });
-                        row.removeAttribute(PROCESSED_ATTR);
-                    }
+                    for (const row of rows) clearResultRow(row);
                     if (!searchHidden && !isWorkCancelled()) {
                         searchRequiresReload = true;
                         showToast("ORE was updated — reload this page to run checks.", {
@@ -287,6 +300,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
                 }
                 debugWarn(`${label}: augmentation failed for ${requests.length} row(s) —`, err);
             }
+            if (navigated()) return;
             for (const info of titled) {
                 const doi = augmented.get(info.title) ?? null;
                 updateWorkItem(info.title, doi ? "done" : "failed", doi ?? (augmented.has(info.title) ? "no DOI found" : "not checked"));
@@ -361,8 +375,10 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         }
     }
 
+    if (navigated()) return;
     if (hasUnansweredTitles) await updateSearchRetry(adapter, document);
 
+    if (navigated()) return;
     const extractedCount = resolved.filter((r) => r.source === "extracted").length;
     debugLog(`${extractedCount} DOIs from ${label}, ${resolved.length - extractedCount} augmented via Crossref/OpenAlex`);
     if (resolved.length === 0) return;
@@ -381,14 +397,12 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
 
     try {
         const response = await safeSendMessage<LookupResponse>(request);
+        if (navigated()) return;
         if (!response) {
             // This script belongs to an extension version that has been replaced.
             // Provider retry cannot reconnect it; remove incomplete panels and explain recovery.
             for (const doi of uniqueDois) lookupState.delete(doi);
-            for (const {row} of resolved) {
-                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
-                row.removeAttribute(PROCESSED_ATTR);
-            }
+            for (const {row} of resolved) clearResultRow(row);
             if (!searchHidden && !isWorkCancelled()) {
                 searchRequiresReload = true;
                 showToast("ORE was updated — reload this page to run checks.", {
@@ -422,16 +436,14 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         reportWorkStage("report", `Marking up ${count(badgedCount, "result")}…`);
         debugLog(`${label}: Rendered`, badgedCount, "badge(s)");
     } catch (err) {
+        if (navigated()) return;
         for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "FORRT unavailable"});
         if (!isWorkCancelled()) debugLog(`${label}: Lookup failed:`, err);
     } finally {
-        if (isWorkCancelled()) {
+        if (!navigated() && isWorkCancelled()) {
             for (const doi of uniqueDois) lookupState.delete(doi);
-            for (const {row} of resolved) {
-                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
-                row.removeAttribute(PROCESSED_ATTR);
-            }
-        } else if (!searchHidden) refreshBadges();
+            for (const {row} of resolved) clearResultRow(row);
+        } else if (!navigated() && !searchHidden) refreshBadges();
     }
 }
 
@@ -461,8 +473,9 @@ function dismissSearchRetry(): void {
 /** A single retry keeps either failure from hiding the other provider's recovery action. */
 async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
     const pageUrl = location.href;
+    const generation = searchNavigationGeneration;
     const titleMatchingEnabled = await isSetupComplete();
-    if (searchHidden || isWorkCancelled() || searchRequiresReload || retryingSearchChecks || location.href !== pageUrl) return;
+    if (searchHidden || isWorkCancelled() || searchRequiresReload || retryingSearchChecks || location.href !== pageUrl || generation !== searchNavigationGeneration) return;
     const titleFailed = titleMatchingEnabled && [...root.querySelectorAll<HTMLElement>(adapter.resultRow)]
         .some(row => unansweredRows.has(row));
     const noticesFailed = retractionPage === pageUrl && unavailableRetractionDois.size > 0;
@@ -477,8 +490,8 @@ async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): 
     searchRetryToast = showToast(searchRetryMessage, {
         tone: "error", duration: 0,
         action: {label: "Retry", onClick: () => {
-            if (location.href !== pageUrl) {
-                if (retractionPage === pageUrl) dismissSearchRetry();
+            if (location.href !== pageUrl || generation !== searchNavigationGeneration) {
+                if (generation === searchNavigationGeneration) dismissSearchRetry();
                 return;
             }
             if (searchHidden || retryingSearchChecks) return;
@@ -490,49 +503,49 @@ async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): 
 async function retryFailedSearchChecks(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
     retryingSearchChecks = true;
     const pageUrl = location.href;
+    const generation = searchNavigationGeneration;
+    const navigated = () => location.href !== pageUrl || generation !== searchNavigationGeneration;
     const clickedSignal = workSignal();
     const wasCancelled = clickedSignal.aborted;
     try {
         await passQueue;
         await waitForWorkToFinish();
-        if (searchHidden || location.href !== pageUrl || (!wasCancelled && clickedSignal.aborted)) return;
+        if (searchHidden || navigated() || (!wasCancelled && clickedSignal.aborted)) return;
         // New panels run their own notice checks; retry only failures already known at the click.
         const failedNotices = retractionPage === pageUrl ? [...unavailableRetractionDois] : [];
         resumeAutomaticWork();
         beginWorkIndicator({stages: ["augment", "notices"]});
         try {
             await retryUnansweredSearchResults(adapter, root);
-            if (searchHidden || isWorkCancelled() || searchRequiresReload || location.href !== pageUrl) return;
+            if (searchHidden || isWorkCancelled() || searchRequiresReload || navigated()) return;
             if (failedNotices.length > 0) {
                 const recovered = await checkSearchRetractions(failedNotices, adapter);
-                if (searchHidden || isWorkCancelled() || location.href !== pageUrl) return;
+                if (searchHidden || isWorkCancelled() || navigated()) return;
                 for (const notice of recovered) retractions.set(notice.originDoi, notice);
                 refreshBadges();
             }
         } finally { endWorkIndicator(); }
     } finally {
         retryingSearchChecks = false;
-        if (location.href === pageUrl) await updateSearchRetry(adapter, root);
-        else if (retractionPage === pageUrl) dismissSearchRetry();
+        if (!navigated()) await updateSearchRetry(adapter, root);
     }
 }
 
 /** Retry only the unavailable notice lookups; already placed rows stay intact. */
 async function checkSearchRetractions(dois: DoiString[], adapter: SearchSiteAdapter): Promise<RetractionResponse[]> {
     const passUrl = location.href;
-    if (retractionPage !== passUrl) {
-        retractionPage = passUrl;
-        unavailableRetractionDois.clear();
-    }
+    syncRetractionPage();
+    const generation = searchNavigationGeneration;
+    const navigated = () => location.href !== passUrl || generation !== searchNavigationGeneration;
     const signal = activeWorkSignal();
-    const stale = () => signal?.aborted || searchHidden || isWorkCancelled() || location.href !== passUrl;
+    const stale = () => signal?.aborted || searchHidden || isWorkCancelled() || navigated();
     try {
         const notices = await retractionCheck(dois);
         if (stale()) return [];
         const hadFailures = unavailableRetractionDois.size > 0;
         for (const doi of dois) unavailableRetractionDois.delete(doi);
         if (hadFailures && unavailableRetractionDois.size === 0) await updateSearchRetry(adapter, document);
-        return notices;
+        return stale() ? [] : notices;
     } catch (error) {
         if (stale()) return [];
         const hadFailures = unavailableRetractionDois.size > 0;

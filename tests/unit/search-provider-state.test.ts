@@ -1,4 +1,4 @@
-import {beforeEach, expect, it, vi} from "vitest";
+import {afterEach, beforeEach, expect, it, vi} from "vitest";
 import type {SearchSiteAdapter} from "../../src/content-search/sites/types";
 import type {DoiString} from "../../src/shared/types";
 
@@ -6,6 +6,7 @@ const DOI = "10.1234/paper" as DoiString;
 const send = vi.fn();
 const badges = vi.fn();
 const retraction = vi.fn();
+let navigationEvents: EventTarget;
 const adapter: SearchSiteAdapter = {
     id: "test", label: "Test", hostnames: [], css: "", resultRow: ".result", panelPlacement: [],
     extractRow: () => ({doi: DOI, confident: true, title: "Paper", firstAuthor: null, year: null, sourceUrl: null}),
@@ -13,6 +14,8 @@ const adapter: SearchSiteAdapter = {
 beforeEach(() => {
     vi.resetModules();
     document.body.innerHTML = '<div class="result"></div>';
+    navigationEvents = new EventTarget();
+    vi.stubGlobal("navigation", navigationEvents);
     send.mockReset();
     badges.mockClear();
     (chrome.storage.sync.get as ReturnType<typeof vi.fn>).mockResolvedValue({flora_settings: {email: "reader@example.com"}});
@@ -25,6 +28,8 @@ beforeEach(() => {
         createIndicatorPanel: () => {const panel = document.createElement("div"); panel.setAttribute("data-flora-panel", ""); return panel;},
     }));
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 it("retains a failed hidden lookup and refreshes its unavailable state when shown", async () => {
     let reject!: (reason: Error) => void;
@@ -278,4 +283,92 @@ it("keeps Retry for remaining unanswered rows but clears it after results are re
     await processSearchResults(titleAdapter, document);
     expect(document.getElementById('flora-alert-toast')).toBeNull();
     expect(document.querySelectorAll('[data-flora-panel]')).toHaveLength(1);
+});
+
+it.each(["success", "failure"])("ignores stale notice %s after A → B → A without an intervening scan", async (outcome) => {
+    send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
+    let resolveOld!: (value: unknown) => void;
+    let rejectOld!: (reason: Error) => void;
+    retraction.mockImplementationOnce(() => new Promise((resolve, reject) => {resolveOld = resolve; rejectOld = reject;}));
+    const {processSearchResults, setSearchHidden} = await import("../../src/content-search/pipeline");
+    await processSearchResults(adapter, document);
+    const initialUrl = location.href;
+    history.pushState({}, "", "/another-search");
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    history.replaceState({}, "", initialUrl);
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    // The SPA reuses its result nodes; navigation must release our old processing marker.
+    expect(document.querySelector(".result")?.hasAttribute("data-flora-processed")).toBe(false);
+    const currentNotice = {originDoi: DOI, doi: "10.1234/current-notice", kind: "concern"};
+    retraction.mockResolvedValueOnce([currentNotice]);
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(badges.mock.lastCall![2]).toEqual([currentNotice]));
+    if (outcome === "success") resolveOld([{originDoi: DOI, doi: "10.1234/obsolete-notice", kind: "retraction"}]);
+    else rejectOld(new Error("Old page check failed"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    setSearchHidden(false); // Re-render from retained state to catch silent stale-map writes too.
+    expect(badges.mock.lastCall![2]).toEqual([currentNotice]);
+    expect(document.getElementById("flora-alert-toast")).toBeNull();
+});
+
+it("does not start notice checks from an old site-id resolution after A → B → A", async () => {
+    let release!: (value: Map<string, DoiString>) => void;
+    const siteAdapter: SearchSiteAdapter = {
+        ...adapter,
+        extractRow: () => ({doi: null, siteId: "record", confident: false, title: "Paper", firstAuthor: null, year: null, sourceUrl: null}),
+        resolveSiteIds: () => new Promise(resolve => {release = resolve;}),
+    };
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    const pending = processSearchResults(siteAdapter, document);
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    const initialUrl = location.href;
+    history.pushState({}, "", "/other-results");
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    history.replaceState({}, "", initialUrl);
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    document.body.innerHTML = '<div class="result"></div>';
+    release(new Map([["record", DOI]]));
+    await pending;
+    expect(retraction).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(document.querySelector("[data-flora-panel]")).toBeNull();
+});
+
+it("refreshes reused rows after a hash navigation without an explicit pipeline call", async () => {
+    send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
+    const notice = {originDoi: DOI, doi: "10.1234/notice", kind: "concern"};
+    retraction.mockResolvedValue([notice]);
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    const {observeSearchResults} = await import("../../src/content-search/observer");
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(badges.mock.lastCall![2]).toEqual([notice]));
+    observeSearchResults(adapter);
+    history.pushState({}, "", "#next-section");
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(2));
+    expect(document.querySelectorAll("[data-flora-panel]")).toHaveLength(1);
+    expect(badges.mock.lastCall![2]).toEqual([notice]);
+});
+
+it("does not apply a queued shared Retry after A → B → A navigation", async () => {
+    const augment = vi.fn().mockResolvedValue(new Map());
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send, augmentDOIsViaWorker: augment}));
+    const titleAdapter = {...adapter, extractRow: () => ({
+        doi: null, confident: false, title: "Paper", firstAuthor: null, year: null, sourceUrl: null,
+    })};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(titleAdapter, document);
+    const {beginWorkIndicator, endWorkIndicator} = await import("../../src/shared/progress-toast");
+    beginWorkIndicator();
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    const originalUrl = location.href;
+    history.pushState({}, "", "/other-results");
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    history.replaceState({}, "", originalUrl);
+    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    endWorkIndicator();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(augment).toHaveBeenCalledOnce();
+    expect(document.getElementById("flora-alert-toast")).toBeNull();
+    expect(document.querySelector("[data-flora-panel]")).toBeNull();
 });
