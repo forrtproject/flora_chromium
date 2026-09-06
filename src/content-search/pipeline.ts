@@ -62,8 +62,13 @@ function clearResultRow(row: HTMLElement): void {
     row.removeAttribute(PROCESSED_ATTR);
 }
 
+type PageNavigation = EventTarget & {currentEntry?: {key: string}};
+const pageNavigation = (window as Window & {navigation?: PageNavigation}).navigation;
+let lastPageEntryKey = pageNavigation?.currentEntry?.key;
 function syncRetractionPage(): void {
-    if (retractionPage === location.href) return;
+    const entryKey = pageNavigation?.currentEntry?.key;
+    if (retractionPage === location.href && lastPageEntryKey === entryKey) return;
+    lastPageEntryKey = entryKey;
     retractionPage = location.href;
     searchNavigationGeneration++;
     retractionRetryQueued = null;
@@ -75,7 +80,7 @@ function syncRetractionPage(): void {
 }
 // Available since Chrome 102. Unlike a content-world history patch, this sees
 // the page's pushState/replaceState calls, even A → B → A between scan passes.
-(window as Window & {navigation?: EventTarget}).navigation?.addEventListener("currententrychange", syncRetractionPage);
+pageNavigation?.addEventListener("currententrychange", syncRetractionPage);
 
 function refreshBadges(): void {
     updateIndicatorPillBadges(document, lookupState, [...retractions.values()], "panels");
@@ -453,18 +458,19 @@ async function checkSearchRetractions(dois: DoiString[]): Promise<RetractionResp
                 const wasCancelled = queuedSignal?.aborted;
                 const queued = {page: passUrl, generation};
                 retractionRetryQueued = queued;
-                try { await waitForWorkToFinish(); }
-                finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
-                if (searchHidden || navigated()) return;
-                if (!wasCancelled && queuedSignal?.aborted) return;
-                resumeAutomaticWork();
-                beginWorkIndicator({stages: ["notices"]});
                 try {
-                    const recovered = await checkSearchRetractions([...unavailableRetractionDois]);
-                    if (searchHidden || isWorkCancelled() || navigated()) return;
-                    for (const notice of recovered) retractions.set(notice.originDoi, notice);
-                    refreshBadges();
-                } finally { endWorkIndicator(); }
+                    await waitForWorkToFinish();
+                    if (searchHidden || navigated()) return;
+                    if (!wasCancelled && queuedSignal?.aborted) return;
+                    resumeAutomaticWork();
+                    beginWorkIndicator({stages: ["notices"]});
+                    try {
+                        const recovered = await checkSearchRetractions([...unavailableRetractionDois]);
+                        if (searchHidden || isWorkCancelled() || navigated()) return;
+                        for (const notice of recovered) retractions.set(notice.originDoi, notice);
+                        refreshBadges();
+                    } finally { endWorkIndicator(); }
+                } finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
             }},
         });
         return [];

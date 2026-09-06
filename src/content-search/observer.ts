@@ -24,12 +24,18 @@ export function observeSearchResults(adapter: SearchSiteAdapter): void {
     };
     // Same-document navigation may reuse every result node, so no added-row
     // mutation will arrive. Coalesce rapid history changes and read the final DOM.
+    const navigation = (window as Window & {navigation?: EventTarget & {currentEntry?: {key: string}}}).navigation;
     let observedUrl = location.href;
-    (window as Window & {navigation?: EventTarget}).navigation?.addEventListener("currententrychange", () => {
-        if (observedUrl === location.href) return;
+    let observedKey = navigation?.currentEntry?.key;
+    navigation?.addEventListener("currententrychange", () => {
+        const key = navigation.currentEntry?.key;
+        if (observedUrl === location.href && observedKey === key) return;
         observedUrl = location.href;
+        observedKey = key;
         queuePass();
     });
+
+
 
     const observer = new MutationObserver((mutations) => {
         let hasNewRows = false;
