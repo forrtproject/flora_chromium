@@ -3,7 +3,8 @@
 import { debugError } from "./debug";
 
 export interface FloraSettings {
-  /** Contact email for Crossref/OpenAlex polite pool (required). */
+  /** Optional API contact email for Crossref, OpenAlex, Unpaywall and NCBI.
+   * Title matching and Unpaywall lookups require a nonempty value. */
   email: string;
   /** Citation format id used by the pill's Copy citation row (see citation.ts). */
   citationStyle: string;
