@@ -88,3 +88,16 @@ it("cancels worker messages on HTTP pages and permits user actions after the pas
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("citation")));
     expect(await (await fetchWithDeadline("https://example.org/citation")).text()).toBe("citation");
 });
+
+it("keeps an explicit user request independent while a scan is being cancelled", async () => {
+    let transport!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init: RequestInit) => {
+        transport = init.signal!;
+        return new Response("citation");
+    }));
+    beginCancellableWork();
+    const response = await fetchWithDeadline("https://example.org/citation", {signal: null});
+    cancelWork();
+    expect(transport.aborted).toBe(false);
+    expect(await response.text()).toBe("citation");
+});

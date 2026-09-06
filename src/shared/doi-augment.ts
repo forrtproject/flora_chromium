@@ -1,3 +1,4 @@
+import {activeWorkSignal} from "@shared/work-cancellation";
 import type {DoiString, DoiAugmentRequest} from "./types";
 import {normaliseDOI} from "./doi-normalise";
 import {getSettings} from "./settings";
@@ -648,7 +649,7 @@ const TITLE_CACHE = new BlobCache<{ title: string | null }>({
  * OpenAlex. Cached in chrome.storage.local since a published title never
  * changes. Returns null when neither service has the DOI.
  */
-export async function fetchTitleByDoi(doi: string): Promise<string | null> {
+export async function fetchTitleByDoi(doi: string, signal: AbortSignal | undefined = activeWorkSignal()): Promise<string | null> {
     const cached = await TITLE_CACHE.get(doi);
     if (cached) return cached.title;
 
@@ -661,7 +662,7 @@ export async function fetchTitleByDoi(doi: string): Promise<string | null> {
     try {
         const email = await getUserEmail();
         const mailto = email ? `?mailto=${encodeURIComponent(email)}` : "";
-        const response = await crossrefGate.fetch(`${CROSSREF_BASE}/${encodedDoi}${mailto}`);
+        const response = await crossrefGate.fetch(`${CROSSREF_BASE}/${encodedDoi}${mailto}`, {signal: signal ?? null});
         crossrefAnswered = response.ok || response.status === 404;
         if (response.ok) {
             const data = (await response.json()) as { message?: { title?: string[] } };
@@ -671,9 +672,10 @@ export async function fetchTitleByDoi(doi: string): Promise<string | null> {
         // Crossref failed — fall through to OpenAlex
     }
 
+    if (signal?.aborted) return null;
     if (!title) {
         try {
-            const response = await openalexGate.fetch(`${OPENALEX_BASE}/doi:${encodedDoi}?select=title`);
+            const response = await openalexGate.fetch(`${OPENALEX_BASE}/doi:${encodedDoi}?select=title`, {signal: signal ?? null});
             openalexAnswered = response.ok || response.status === 404;
             if (response.ok) {
                 const data = (await response.json()) as { title?: string };

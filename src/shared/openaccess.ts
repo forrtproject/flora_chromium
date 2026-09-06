@@ -113,7 +113,7 @@ export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | n
 async function requestOpenAccess(doi: string, email: string, signal?: AbortSignal): Promise<OpenAccessStatus | null> {
     try {
         const resp = await UNPAYWALL_GATE.fetch(
-            `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`, {signal}
+            `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`, {signal: signal ?? null}
         );
         if (resp.status === 404) {
             const status = {isOa: false, url: null, notIndexed: true, checkedAt: Date.now()};
@@ -148,4 +148,5 @@ async function requestOpenAccess(doi: string, email: string, signal?: AbortSigna
 /** Test-only: drop in-memory cache state so each case starts fresh. */
 export function _resetOpenAccessCacheForTesting(): void {
     OA_CACHE.resetForTesting();
+    pending.clear();
 }

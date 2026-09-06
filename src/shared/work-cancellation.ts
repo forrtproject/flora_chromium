@@ -28,7 +28,8 @@ export function abortableDelay(ms: number, signal?: AbortSignal | null): Promise
 
 /** Bound both headers and response-body reads; cancellation aborts the transport. */
 export async function fetchWithDeadline(url: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-  const parent = init.signal ?? activeWorkSignal();
+  // Explicit null keeps user-triggered requests independent of the page scan.
+  const parent = init.signal === undefined ? activeWorkSignal() : init.signal;
   parent?.throwIfAborted();
   const deadline = new AbortController();
   const abort = () => deadline.abort(parent?.reason);

@@ -1,4 +1,4 @@
-import {fetchWithDeadline} from "@shared/work-cancellation";
+import {activeWorkSignal, fetchWithDeadline} from "@shared/work-cancellation";
 import { debugLog } from "./debug";
 import { BlobCache } from "./blob-cache";
 import { getHiddenCommenters, isHiddenCommenter } from "./pubpeer-filter";
@@ -44,11 +44,13 @@ export class PubPeerRateLimitError extends Error {
 
 async function fetchPubPeer(
   dois: string[],
-  urls: string[]
+  urls: string[],
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
   const response = await fetchWithDeadline(
     "https://pubpeer.com/v3/publications?devkey=PubMedChrome",
     {
+      signal: signal ?? null,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -73,9 +75,10 @@ async function fetchPubPeer(
 
 export async function lookupPubPeer(
   dois: string[],
-  urls: string[]
+  urls: string[],
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
-  const feedbacks = await fetchPubPeer(dois, urls);
+  const feedbacks = await fetchPubPeer(dois, urls, signal);
   const hidden = await getHiddenCommenters();
   return feedbacks.map((feedback) => applyCommenterMutes(feedback, hidden));
 }
@@ -107,7 +110,8 @@ let rateLimitedUntil = 0;
  * Returns a Map containing only the DOIs PubPeer has a record for.
  */
 export async function lookupPubPeerForDois<T extends string>(
-  dois: T[], unavailable = new Set<string>()
+  dois: T[], unavailable = new Set<string>(),
+  signal: AbortSignal | undefined = activeWorkSignal()
 ): Promise<Map<T, PubPeerFeedback>> {
   const result = new Map<T, PubPeerFeedback>();
   if (dois.length === 0) return result;
@@ -142,7 +146,7 @@ export async function lookupPubPeerForDois<T extends string>(
   // 2. One batch call for all uncached DOIs.
   let feedbacks: PubPeerFeedback[] = [];
   try {
-    feedbacks = await fetchPubPeer(uncached.map(cacheKey), []);
+    feedbacks = await fetchPubPeer(uncached.map(cacheKey), [], signal);
   } catch (err) {
     for (const doi of uncached) unavailable.add(doi);
     if (err instanceof PubPeerRateLimitError) {
@@ -175,36 +179,46 @@ export async function lookupPubPeerForDois<T extends string>(
 // POSTs, all issued before any has written to the cache — so all of them miss
 // it and PubPeer 429s. Collect same-tick lookups into one batch.
 const BATCH_WINDOW_MS = 50;
-const pendingDois = new Map<string, Array<{resolve: (fb: PubPeerFeedback | null) => void; reject: (err: Error) => void}>>();
+type Batch = Map<string, Array<{resolve: (fb: PubPeerFeedback | null) => void; reject: (err: Error) => void}>>;
+// Keep each scan’s ownership across the batching delay and storage awaits.
+const pendingDois = new Map<AbortSignal | undefined, Batch>();
 let flushHandle: ReturnType<typeof setTimeout> | null = null;
 
 function flushPendingDois(): void {
   flushHandle = null;
   if (pendingDois.size === 0) return;
-  const batch = new Map(pendingDois);
+  const batches = new Map(pendingDois);
   pendingDois.clear();
 
-  const unavailable = new Set<string>();
-  const settle = (map: Map<string, PubPeerFeedback> | null) => {
-    for (const [doi, resolvers] of batch) {
-      const feedback = map?.get(doi) ?? null;
-      for (const caller of resolvers) {
-        if (!map || unavailable.has(doi)) caller.reject(rateLimitedUntil > Date.now() ? new PubPeerRateLimitError(rateLimitedUntil - Date.now()) : new Error("PubPeer unavailable"));
-        else caller.resolve(feedback);
+  for (const [signal, batch] of batches) {
+    const unavailable = new Set<string>();
+    const settle = (map: Map<string, PubPeerFeedback> | null) => {
+      for (const [doi, resolvers] of batch) {
+        const feedback = map?.get(doi) ?? null;
+        for (const caller of resolvers) {
+          if (signal?.aborted) caller.reject(signal.reason);
+          else if (!map || unavailable.has(doi)) caller.reject(rateLimitedUntil > Date.now() ? new PubPeerRateLimitError(rateLimitedUntil - Date.now()) : new Error("PubPeer unavailable"));
+          else caller.resolve(feedback);
+        }
       }
-    }
-  };
-  lookupPubPeerForDois([...batch.keys()], unavailable).then(settle).catch(() => settle(null));
+    };
+    if (signal?.aborted) { settle(null); continue; }
+    lookupPubPeerForDois([...batch.keys()], unavailable, signal).then(settle).catch(() => settle(null));
+  }
 }
 
 /** A confirmed miss resolves to null; unavailable responses reject so the UI can offer retry. */
 export function lookupPubPeerForDoi(doi: string): Promise<PubPeerFeedback | null> {
+  const signal = activeWorkSignal();
   return new Promise((resolve, reject) => {
-    const waiting = pendingDois.get(doi);
+    if (signal?.aborted) { reject(signal.reason); return; }
+    let batch = pendingDois.get(signal);
+    if (!batch) { batch = new Map(); pendingDois.set(signal, batch); }
+    const waiting = batch.get(doi);
     if (waiting) {
       waiting.push({resolve, reject});
     } else {
-      pendingDois.set(doi, [{resolve, reject}]);
+      batch.set(doi, [{resolve, reject}]);
     }
     if (flushHandle === null) flushHandle = setTimeout(flushPendingDois, BATCH_WINDOW_MS);
   });
