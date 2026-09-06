@@ -732,7 +732,7 @@ function extractPageAugmentationMetadata(doc: Document): Omit<DoiAugmentRequest,
 }
 
 async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): Promise<void> {
-    const signal = activeWorkSignal();
+    const signal = activeWorkSignal() ?? null;
     if (isSheets) return;
     const primaryDoi = extractPrimaryDOI(document);
     if (!primaryDoi) return;
@@ -799,7 +799,7 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         lastRenderedPageStateVersion = pageStateVersion;
         renderSidePanel(articleFeedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle);
     } catch (err) {
-        debugWarn("PubPeer panel: lookup or render failed —", err);
+        if (!signal?.aborted) debugWarn("PubPeer panel: lookup or render failed —", err);
     }
 }
 

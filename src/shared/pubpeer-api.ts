@@ -45,7 +45,7 @@ export class PubPeerRateLimitError extends Error {
 async function fetchPubPeer(
   dois: string[],
   urls: string[],
-  signal: AbortSignal | undefined = activeWorkSignal()
+  signal: AbortSignal | null | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
   const response = await fetchWithDeadline(
     "https://pubpeer.com/v3/publications?devkey=PubMedChrome",
@@ -75,7 +75,7 @@ async function fetchPubPeer(
 export async function lookupPubPeer(
   dois: string[],
   urls: string[],
-  signal: AbortSignal | undefined = activeWorkSignal()
+  signal: AbortSignal | null | undefined = activeWorkSignal()
 ): Promise<PubPeerFeedback[]> {
   const feedbacks = await fetchPubPeer(dois, urls, signal);
   const hidden = await getHiddenCommenters();
@@ -110,7 +110,7 @@ let rateLimitedUntil = 0;
  */
 export async function lookupPubPeerForDois<T extends string>(
   dois: T[],
-  signal: AbortSignal | undefined = activeWorkSignal()
+  signal: AbortSignal | null | undefined = activeWorkSignal()
 ): Promise<Map<T, PubPeerFeedback>> {
   const result = new Map<T, PubPeerFeedback>();
   if (dois.length === 0) return result;
@@ -178,7 +178,7 @@ export async function lookupPubPeerForDois<T extends string>(
 const BATCH_WINDOW_MS = 50;
 type Batch = Map<string, Array<(fb: PubPeerFeedback | null) => void>>;
 // Keep each scan’s ownership across the batching delay and storage awaits.
-const pendingDois = new Map<AbortSignal | undefined, Batch>();
+const pendingDois = new Map<AbortSignal | null, Batch>();
 let flushHandle: ReturnType<typeof setTimeout> | null = null;
 
 function flushPendingDois(): void {
@@ -201,7 +201,7 @@ function flushPendingDois(): void {
 
 /** Resolves to null on miss or failure — callers render "no discussion" for both. */
 export function lookupPubPeerForDoi(doi: string): Promise<PubPeerFeedback | null> {
-  const signal = activeWorkSignal();
+  const signal = activeWorkSignal() ?? null;
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve(null); return; }
     let batch = pendingDois.get(signal);

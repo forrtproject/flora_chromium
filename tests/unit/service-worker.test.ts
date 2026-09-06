@@ -1,4 +1,4 @@
-import {describe, it, expect, vi, beforeEach} from "vitest";
+import {describe, it, expect, vi, beforeEach, afterEach} from "vitest";
 import type {
     LookupRequest,
     LookupResponse,
@@ -11,6 +11,8 @@ import {MONTH_MS} from "../../src/shared/cache";
 
 
 const MOCK_RESULT = mockResult();
+
+afterEach(() => vi.restoreAllMocks());
 
 // Mock flora-api before importing service worker
 const mockLookupDOIs = vi.fn();
@@ -435,7 +437,6 @@ describe("service-worker", () => {
             await new Promise(resolve => setTimeout(resolve, 0));
             expect(fetchMock).not.toHaveBeenCalled();
             expect(mockStorageSync).not.toHaveBeenCalled();
-            fetchMock.mockRestore();
         });
 
         it("shares fallback transport, aborts only when the last check cancels, and permits retry", async () => {
@@ -459,7 +460,6 @@ describe("service-worker", () => {
             const retry = await check("retry");
             expect(retry.results).toEqual([{originDoi: "10.1234/paper", doi: "10.1234/notice", kind: "retraction"}]);
             expect(fetchMock).toHaveBeenCalledTimes(2);
-            fetchMock.mockRestore();
         });
 
         it("reports an error when no data source is available", async () => {
