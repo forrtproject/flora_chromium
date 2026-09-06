@@ -4,6 +4,15 @@ export const RET_MAP_KEY = "RetractionLookupLocal";
 // Successful sync generation deliberately evicted by the shared cache budget.
 export const RET_BUDGET_EVICTED_SYNC_KEY = "flora_retraction_budget_evicted_sync";
 
+// The service worker owns both refresh and budget eviction. Keep each map /
+// sync-metadata update together across their asynchronous storage operations.
+let retractionStorageUpdate: Promise<void> = Promise.resolve();
+export function withRetractionStorageUpdate<T>(update: () => Promise<T>): Promise<T> {
+    const result = retractionStorageUpdate.then(update);
+    retractionStorageUpdate = result.then(() => undefined, () => undefined);
+    return result;
+}
+
 /**
  * Prebuilt retraction data, refreshed daily by the GitHub Action
  * (`.github/workflows/update.yml` -> `retractions-updater.ts`) which parses and
@@ -44,6 +53,9 @@ export async function fetchRetractionMap(): Promise<RetractionMaps | undefined> 
 export async function storageSync(): Promise<boolean> {
     const map = await fetchRetractionMap();
     if (!map) return false;
-    await chrome.storage.local.set({[RET_MAP_KEY]: map});
+    await withRetractionStorageUpdate(async () => {
+        await chrome.storage.local.set({[RET_MAP_KEY]: map, synctime: Date.now()});
+        await chrome.storage.local.remove(RET_BUDGET_EVICTED_SYNC_KEY);
+    });
     return true;
 }

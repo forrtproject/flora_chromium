@@ -578,11 +578,11 @@ export function syncRetractionsInfo(): Promise<void> {
 async function runRetractionSync(): Promise<void> {
     const minInterval = 1000 * 60 * 60 * 24 * 7; // weekly
     const currentTime = Date.now();
-    const previous = await chrome.storage.local.get(["synctime", RET_BUDGET_EVICTED_SYNC_KEY]);
+    // One snapshot keeps the map and its eviction metadata consistent.
+    const previous = await chrome.storage.local.get(["synctime", RET_BUDGET_EVICTED_SYNC_KEY, RET_MAP_KEY]);
     const lastSync = previous.synctime || 0;
     const nextUpdate = lastSync + minInterval;
-    const storageResult = await chrome.storage.local.get(RET_MAP_KEY);
-    const map = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
+    const map = previous[RET_MAP_KEY] as RetractionMaps | undefined;
     const isEmpty = !map || (
         Object.keys(map.retractions || {}).length === 0 &&
         Object.keys(map.concerns || {}).length === 0
@@ -590,10 +590,6 @@ async function runRetractionSync(): Promise<void> {
     const deliberatelyEvicted = map === undefined && Number.isFinite(lastSync) && lastSync > 0 &&
         previous[RET_BUDGET_EVICTED_SYNC_KEY] === lastSync;
     if ((isEmpty && !deliberatelyEvicted) || currentTime > nextUpdate) {
-        const synced = await storageSync();
-        if (synced) {
-            await chrome.storage.local.set({synctime: currentTime});
-            await chrome.storage.local.remove(RET_BUDGET_EVICTED_SYNC_KEY);
-        }
+        await storageSync();
     }
 }
