@@ -542,10 +542,10 @@ async function loadRetractionSource(): Promise<RetractionMaps> {
         return source;
     }
 
-    // Nothing synced yet: kick off a sync for next time and answer from the
-    // bundled JSON now. Don't cache the fallback — onChanged will pick up the
-    // synced map, but until then we re-read so an in-flight sync is noticed.
-    debugLog("Retractions: nothing synced yet — answering from the bundled map and starting a sync");
+    // The synced map may be absent on first use or after budget eviction.
+    // Answer from the bundled JSON and check whether refresh is due. Don't
+    // cache this source choice, so a newly synced map is noticed on next check.
+    debugLog("Retractions: no stored map — answering from the bundled map and checking refresh schedule");
     syncRetractionsInfo().catch((err) => debugError("Retractions: sync failed —", err));
     return loadBundledRetractionMap();
 }

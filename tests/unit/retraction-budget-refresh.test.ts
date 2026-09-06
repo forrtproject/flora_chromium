@@ -19,7 +19,11 @@ beforeEach(() => {
     store = {};
     remoteRequests = 0;
     vi.mocked(chrome.runtime.onMessage.addListener).mockClear();
-    chrome.storage.local.get = vi.fn(async () => structuredClone(store));
+    chrome.storage.local.get = vi.fn(async keys => {
+        const wanted = keys === null ? Object.keys(store) : Array.isArray(keys) ? keys :
+            typeof keys === "string" ? [keys] : Object.keys(keys ?? {});
+        return structuredClone(Object.fromEntries(wanted.filter(key => key in store).map(key => [key, store[key]])));
+    });
     chrome.storage.local.set = vi.fn(async items => {Object.assign(store, structuredClone(items));});
     chrome.storage.local.remove = vi.fn(async keys => {
         for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
@@ -59,9 +63,26 @@ describe("retraction refresh after cache budget eviction", () => {
         expect(remoteRequests).toBe(2);
         expect(store[RET_BUDGET_EVICTED_SYNC_KEY]).toBeUndefined();
         await enforceCacheBudget(40);
+        expect(store[RET_BUDGET_EVICTED_SYNC_KEY]).toBe(NOW + WEEK + 1);
         await checkRetraction();
         await syncRetractionsInfo();
         expect(remoteRequests).toBe(2);
+    });
+
+    it("uses the current sync generation when refresh lands during budget accounting", async () => {
+        store = {[RET_MAP_KEY]: map, synctime: NOW};
+        const bytes = chrome.storage.local.getBytesInUse;
+        vi.mocked(chrome.storage.local.getBytesInUse).mockImplementationOnce(async keys => {
+            const size = await bytes(keys);
+            store.synctime = NOW + 1; // a successful refresh after the sweep snapshot
+            return size;
+        });
+        const {enforceCacheBudget} = await import("../../src/shared/cache-budget");
+        await enforceCacheBudget(40);
+        expect(store[RET_BUDGET_EVICTED_SYNC_KEY]).toBe(NOW + 1);
+        const {syncRetractionsInfo} = await import("../../src/background/service-worker");
+        await syncRetractionsInfo();
+        expect(remoteRequests).toBe(0);
     });
 
     it.each(["missing", "empty", "old-marker"])("still repairs a %s map without matching budget eviction", async kind => {
