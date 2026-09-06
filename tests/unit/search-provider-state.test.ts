@@ -162,3 +162,77 @@ it("does not offer Retry for a cancelled notice check", async () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(document.getElementById("flora-alert-toast")).toBeNull();
 });
+
+it("keeps one Retry for both failed providers until each recovers", async () => {
+    document.body.innerHTML = '<div class="result" data-doi="10.1234/paper">Known paper</div><div class="result">Unresolved paper</div>';
+    const augment = vi.fn().mockResolvedValueOnce(new Map()).mockResolvedValueOnce(new Map())
+        .mockResolvedValueOnce(new Map([["Unresolved paper", "10.1234/resolved"]]));
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send, augmentDOIsViaWorker: augment}));
+    send.mockResolvedValue({results: {}, errors: {}});
+    const notice = {originDoi: DOI, doi: "10.1234/notice", kind: "retraction"};
+    retraction.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([notice]);
+    const mixedAdapter = {...adapter, extractRow: (row: HTMLElement) => ({
+        doi: row.dataset.doi as DoiString ?? null, confident: !!row.dataset.doi,
+        title: row.textContent!, firstAuthor: null, year: null, sourceUrl: null,
+    })};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(mixedAdapter, document);
+    await vi.waitFor(() => expect(document.getElementById("flora-alert-toast")?.textContent).toContain("DOI matching and retraction checks unavailable"));
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    await vi.waitFor(() => expect(badges.mock.lastCall![2]).toEqual([notice]));
+    expect(augment).toHaveBeenCalledTimes(2);
+    expect(retraction).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(document.getElementById("flora-alert-toast")?.textContent).toContain("DOI matching unavailable for some results");
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    await vi.waitFor(() => expect(document.querySelectorAll("[data-flora-panel]")).toHaveLength(2));
+    await vi.waitFor(() => expect(document.getElementById("flora-alert-toast")).toBeNull());
+    expect(retraction.mock.calls.map(call => call[0])).toEqual([[DOI], [DOI], ["10.1234/resolved"]]);
+    expect(send).toHaveBeenCalledTimes(2);
+});
+
+it("does not resume a queued Retry after the user subsequently cancels", async () => {
+    const augment = vi.fn().mockResolvedValue(new Map());
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send, augmentDOIsViaWorker: augment}));
+    send.mockResolvedValue({results: {}, errors: {}});
+    const mixedAdapter = {...adapter, extractRow: (row: HTMLElement) => ({
+        doi: row.dataset.doi as DoiString ?? null, confident: !!row.dataset.doi,
+        title: "Unresolved paper", firstAuthor: null, year: null, sourceUrl: null,
+    })};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(mixedAdapter, document);
+    let settle!: (value: unknown) => void;
+    send.mockImplementationOnce(() => new Promise(resolve => {settle = resolve;}));
+    document.body.insertAdjacentHTML("beforeend", '<div class="result" data-doi="10.1234/next"></div>');
+    const nextPass = processSearchResults(mixedAdapter, document);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    const {canStartAutomaticWork} = await import("../../src/shared/work-cancellation");
+    await vi.waitFor(() => expect(document.querySelector("[data-flora-work-cancel]")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>("[data-flora-work-cancel]")!.click();
+    settle({results: {}, errors: {}});
+    await nextPass;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(canStartAutomaticWork()).toBe(false);
+    expect(augment).toHaveBeenCalledOnce();
+});
+
+it("clears the old warning and retries reused unresolved rows on SPA navigation", async () => {
+    const augment = vi.fn().mockResolvedValueOnce(new Map()).mockResolvedValueOnce(new Map([["Paper", DOI]]));
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send, augmentDOIsViaWorker: augment}));
+    send.mockResolvedValue({results: {}, errors: {}});
+    const titleAdapter = {...adapter, extractRow: () => ({
+        doi: null, confident: false, title: "Paper", firstAuthor: null, year: null, sourceUrl: null,
+    })};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(titleAdapter, document);
+    expect(document.getElementById("flora-alert-toast")).not.toBeNull();
+    const previousUrl = location.href;
+    try {
+        history.replaceState(null, "", "/next-page");
+        await processSearchResults(titleAdapter, document);
+        expect(augment).toHaveBeenCalledTimes(2);
+        expect(document.getElementById("flora-alert-toast")).toBeNull();
+        expect(document.querySelectorAll("[data-flora-panel]")).toHaveLength(1);
+    } finally { history.replaceState(null, "", previousUrl); }
+});
