@@ -244,7 +244,9 @@ async function checkPageRetractions(dois: DoiString[]): Promise<RetractionRespon
     const passUrl = location.href;
     const generation = sheetFetchGen;
     const checkedPageGeneration = pageGeneration;
-    const navigated = () => location.href !== passUrl || generation !== sheetFetchGen || checkedPageGeneration !== pageGeneration;
+    const checkedSheetKey = isSheets ? currentSheetKey() : null;
+    const navigated = () => (isSheets ? currentSheetKey() !== checkedSheetKey : location.href !== passUrl)
+        || generation !== sheetFetchGen || checkedPageGeneration !== pageGeneration;
     const signal = activeWorkSignal();
     const stale = () => signal?.aborted || floraHidden || isWorkCancelled()
         || navigated();
@@ -312,6 +314,12 @@ const pageNavigation = (window as Window & {navigation?: PageNavigation}).naviga
 let lastPageEntryKey = pageNavigation?.currentEntry?.key;
 function syncPageNavigation(): void {
     const entryKey = pageNavigation?.currentEntry?.key;
+    // A sheet export belongs to its spreadsheet/tab, regardless of selection or history entry.
+    if (isSheets && sheetTabKey(parseSheetsUrl(lastUrl)) === currentSheetKey()) {
+        lastUrl = location.href;
+        lastPageEntryKey = entryKey;
+        return;
+    }
     if (lastUrl === location.href && lastPageEntryKey === entryKey) return;
     lastUrl = location.href;
     lastPageEntryKey = entryKey;
@@ -333,6 +341,7 @@ function syncPageNavigation(): void {
     retractionRetryQueued = null;
     dismissRetractionRetry();
     pendingNothingToFlag = null;
+    nothingToFlagReportedFor = null;
     augmentAttempted = false;
     resetRetractionPills();
     removeIndicatorPills();
