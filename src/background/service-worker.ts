@@ -93,7 +93,7 @@ ensureRetractionSyncAlarm().catch((err) => {
 
 
 /** In-flight dedup: prevents duplicate API calls for the same DOI */
-const inflight = new Map<DoiString, Promise<ReplicationResult | null>>();
+const inflight = new Map<DoiString, Promise<{result: ReplicationResult | null; error?: string}>>();
 
 chrome.runtime.onMessage.addListener(
     (message: unknown, sender, sendResponse) => {
@@ -328,7 +328,8 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
             results[doi] = hit;
         } else if (inflight.has(doi)) {
             const r = await inflight.get(doi)!;
-            if (r) results[doi] = r;
+            if (r.result) results[doi] = r.result;
+            if (r.error) errors[doi] = r.error;
         } else {
             toFetch.push(doi);
         }
@@ -339,14 +340,15 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
     }
 
     // Batch API call for uncached DOIs
-    const batchPromise = lookupDOIs(toFetch);
+    const batchPromise = lookupDOIs(toFetch, errors);
 
     // Register each DOI as in-flight (catch to prevent unhandled rejection —
     // the main try/catch below handles the actual error reporting)
     for (const doi of toFetch) {
         inflight.set(
             doi,
-            batchPromise.then((map) => map.get(doi) ?? null).catch(() => null)
+            batchPromise.then((map) => ({result: map.get(doi) ?? null, error: errors[doi]}))
+                .catch((err) => ({result: null, error: err instanceof Error ? err.message : "Lookup failed"}))
         );
     }
 

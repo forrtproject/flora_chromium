@@ -19,10 +19,12 @@ const BATCH_SIZE = 50;
 /**
  * Look up replication data for a batch of DOIs.
  * Uses the FORRT replication API: GET /v1/original-lookup?dois=doi1,doi2,...
- * Splits into batches of 50 to avoid 414 URI-too-long errors.
+ * Splits into batches of 50 to limit URL length.
+ * Populates `errors` for failed DOIs while retaining successful batch results.
  */
 export async function lookupDOIs(
-  dois: DoiString[]
+  dois: DoiString[],
+  errors: Record<string, string> = {},
 ): Promise<Map<DoiString, ReplicationResult>> {
   if (dois.length === 0) {
     return new Map();
@@ -37,13 +39,15 @@ export async function lookupDOIs(
     const batch = dois.slice(i, i + BATCH_SIZE);
     debugLog(`Batch ${batchNum}/${totalBatches}: ${batch.length} DOIs`);
     try {
-      const batchResults = await lookupBatch(batch);
+      const batchResults = await lookupBatch(batch, errors);
       for (const [doi, result] of batchResults) {
         results.set(doi, result);
       }
       debugLog(`Batch ${batchNum} returned ${batchResults.size} results`);
     } catch (err) {
       debugError(`Batch ${batchNum} failed:`, err);
+      const message = err instanceof Error ? err.message : "Lookup failed";
+      for (const doi of batch) errors[doi] = message;
     }
   }
 
@@ -75,7 +79,8 @@ export async function createDoiSet(dois: DoiString[]): Promise<string | null> {
 }
 
 async function lookupBatch(
-  dois: DoiString[]
+  dois: DoiString[],
+  errors: Record<string, string> = {},
 ): Promise<Map<DoiString, ReplicationResult>> {
   const doisParam = dois.join(",");
   const response = await fetch(
@@ -96,6 +101,7 @@ async function lookupBatch(
     if (parsed.success) {
       results.set(doi.toLowerCase() as DoiString, parsed.data);
     } else {
+      errors[doi.toLowerCase()] = "FLoRA API returned a malformed result";
       // Skip a malformed entry rather than failing every DOI in the batch.
       debugError(`FLoRA API: skipping malformed result for ${doi}:`, parsed.error.issues);
     }

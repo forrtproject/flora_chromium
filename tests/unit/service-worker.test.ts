@@ -256,6 +256,29 @@ describe("service-worker", () => {
         );
     });
 
+    it("shares a caught batch failure with concurrent callers without caching it", async () => {
+        let finish!: () => void;
+        const pending = new Promise<void>(resolve => { finish = resolve; });
+        mockLookupDOIs.mockImplementation(async (_dois, errors) => {
+            await pending;
+            errors["10.1038/nature12373"] = "FLoRA API error: 503";
+            return new Map();
+        });
+        const request: LookupRequest = {type: "FLORA_LOOKUP", dois: [doi("10.1038/nature12373")]};
+        const first = sendMessage(request);
+        await vi.waitFor(() => expect(mockLookupDOIs).toHaveBeenCalledOnce());
+        const second = sendMessage(request);
+        // Let the second cache read reach the shared in-flight request.
+        await Promise.resolve();
+        finish();
+        for (const response of await Promise.all([first, second])) {
+            expect(response.errors["10.1038/nature12373"]).toMatch(/503/);
+            expect(response.results).toEqual({});
+        }
+        expect(mockLookupDOIs).toHaveBeenCalledOnce();
+        expect(cacheSetCalls).toHaveLength(0);
+    });
+
     it("applies a finite TTL to lookup cache writes (not forever)", async () => {
         mockLookupDOIs.mockResolvedValue(
             new Map([[doi("10.1038/nature12373"), MOCK_RESULT]])
@@ -540,7 +563,7 @@ describe("service-worker", () => {
 
         expect(mockLookupDOIs).toHaveBeenCalledWith([
             doi("10.1126/science.9999999"),
-        ]);
+        ], expect.any(Object));
         expect(response.results["10.1038/nature12373"]).toEqual(MOCK_RESULT);
         expect(response.results["10.1126/science.9999999"]).toEqual(otherResult);
     });
