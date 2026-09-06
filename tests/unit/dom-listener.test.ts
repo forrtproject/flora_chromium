@@ -47,11 +47,27 @@ describe("startDomListener", () => {
         observer?.disconnect();
         observer = undefined;
         vi.useRealTimers();
+        vi.unstubAllGlobals();
     });
 
     function listen(getLastUrl = () => location.href): void {
         observer = startDomListener({scanWholePage, getLastUrl});
     }
+
+    it("coalesces new same-URL history entries and skips unchanged entry state updates", () => {
+        const navigation = Object.assign(new EventTarget(), {currentEntry: {key: "first"}});
+        vi.stubGlobal("navigation", navigation);
+        listen();
+        navigation.dispatchEvent(new Event("currententrychange"));
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(scanWholePage).not.toHaveBeenCalled();
+        navigation.currentEntry = {key: "second"};
+        navigation.dispatchEvent(new Event("currententrychange"));
+        navigation.currentEntry = {key: "third"};
+        navigation.dispatchEvent(new Event("currententrychange"));
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(scanWholePage).toHaveBeenCalledTimes(1);
+    });
 
     it("skips the full scan for mutations with no DOI content", async () => {
         listen();

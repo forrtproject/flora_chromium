@@ -39,6 +39,20 @@ export function startDomListener({scanWholePage, getLastUrl}: DomListenerOptions
         }
     };
 
+    const navigation = (window as Window & {navigation?: EventTarget & {currentEntry?: {key: string}}}).navigation;
+    let observedUrl = location.href;
+    let observedKey = navigation?.currentEntry?.key;
+    navigation?.addEventListener("currententrychange", () => {
+        const key = navigation.currentEntry?.key;
+        if (observedUrl === location.href && observedKey === key) return;
+        observedUrl = location.href;
+        observedKey = key;
+        pendingFullScan = true;
+        if (document.hidden) { missedWhileHidden = true; return; }
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(flush, DEBOUNCE_MS);
+    });
+
     const observer = new MutationObserver((mutations) => {
         // Do no work while this tab is in the background.
         if (document.hidden) {

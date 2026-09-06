@@ -308,7 +308,7 @@ it("keeps cancellation stopped but restores recovery after cancelling a queued R
     expect(document.getElementById("flora-alert-toast")).toBeNull();
 });
 
-it.each(["success", "failure"])("ignores stale notice %s after A → B → A without an intervening scan", async (outcome) => {
+it.each(["success", "failure", "same-URL entry"])("ignores stale notice %s after navigation without an intervening scan", async (outcome) => {
     send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
     let resolveOld!: (value: unknown) => void;
     let rejectOld!: (reason: Error) => void;
@@ -316,17 +316,22 @@ it.each(["success", "failure"])("ignores stale notice %s after A → B → A wit
     const {processSearchResults, setSearchHidden} = await import("../../src/content-search/pipeline");
     await processSearchResults(adapter, document);
     const initialUrl = location.href;
-    history.pushState({}, "", "/another-search");
-    navigationEvents.dispatchEvent(new Event("currententrychange"));
-    history.replaceState({}, "", initialUrl);
-    navigationEvents.dispatchEvent(new Event("currententrychange"));
+    if (outcome === "same-URL entry") {
+        (navigationEvents as EventTarget & {currentEntry: {key: string}}).currentEntry = {key: "new-entry"};
+        navigationEvents.dispatchEvent(new Event("currententrychange"));
+    } else {
+        history.pushState({}, "", "/another-search");
+        navigationEvents.dispatchEvent(new Event("currententrychange"));
+        history.replaceState({}, "", initialUrl);
+        navigationEvents.dispatchEvent(new Event("currententrychange"));
+    }
     // The SPA reuses its result nodes; navigation must release our old processing marker.
     expect(document.querySelector(".result")?.hasAttribute("data-flora-processed")).toBe(false);
     const currentNotice = {originDoi: DOI, doi: "10.1234/current-notice", kind: "concern"};
     retraction.mockResolvedValueOnce([currentNotice]);
     await processSearchResults(adapter, document);
     await vi.waitFor(() => expect(badges.mock.lastCall![2]).toEqual([currentNotice]));
-    if (outcome === "success") resolveOld([{originDoi: DOI, doi: "10.1234/obsolete-notice", kind: "retraction"}]);
+    if (outcome !== "failure") resolveOld([{originDoi: DOI, doi: "10.1234/obsolete-notice", kind: "retraction"}]);
     else rejectOld(new Error("Old page check failed"));
     await new Promise(resolve => setTimeout(resolve, 0));
     setSearchHidden(false); // Re-render from retained state to catch silent stale-map writes too.
@@ -438,4 +443,39 @@ it.each(['resolve', 'reject'])("restores a previous row's confirmed DOI after a 
     expect(original.querySelector('[data-flora-panel]')).not.toBeNull();
     expect(document.querySelector('#later')?.hasAttribute('data-flora-processed')).toBe(false);
     expect(document.querySelector('#later [data-flora-panel]')).toBeNull();
+});
+
+
+it("ignores a duplicate Retry while recovery is running, even when recovery fails", async () => {
+    send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
+    let fail!: (reason: Error) => void;
+    retraction.mockRejectedValueOnce(new Error("Unavailable"))
+        .mockImplementationOnce(() => new Promise((_resolve, reject) => {fail = reject;}));
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(document.querySelector("#flora-alert-toast button")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(2));
+    document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!.click();
+    fail(new Error("Still unavailable"));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(retraction).toHaveBeenCalledTimes(2);
+    expect(document.querySelector("#flora-alert-toast button")?.textContent).toBe("Retry");
+});
+
+it("refreshes same-URL new history entries but ignores unchanged-entry state updates", async () => {
+    const navigation = navigationEvents as EventTarget & {currentEntry: {key: string}};
+    navigation.currentEntry = {key: "first"};
+    send.mockResolvedValue({type: "FLORA_LOOKUP_RESULT", results: {}, errors: {}});
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    const {observeSearchResults} = await import("../../src/content-search/observer");
+    await processSearchResults(adapter, document);
+    observeSearchResults(adapter);
+    navigation.dispatchEvent(new Event("currententrychange"));
+    await new Promise(resolve => setTimeout(resolve, 180));
+    expect(retraction).toHaveBeenCalledTimes(1);
+    navigation.currentEntry = {key: "second"};
+    navigation.dispatchEvent(new Event("currententrychange"));
+    await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(2));
+    expect(document.querySelectorAll("[data-flora-panel]")).toHaveLength(1);
 });

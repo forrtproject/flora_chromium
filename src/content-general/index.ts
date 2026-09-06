@@ -150,6 +150,7 @@ document.addEventListener("flora-pause-site", () => {
 
 async function primaryDoiFastPath(): Promise<void> {
     if (floraHidden || !canStartAutomaticWork()) return;
+    const generation = pageGeneration;
     const primary = extractPrimaryDOI(document);
     if (!primary) return;
 
@@ -159,6 +160,7 @@ async function primaryDoiFastPath(): Promise<void> {
     pageState.set(primary, {status: "loading"});
 
     const rollback = (): void => {
+        if (generation !== pageGeneration) return;
         processedDois.delete(primary);
         pageState.delete(primary);
         doiContext.delete(primary);
@@ -171,6 +173,7 @@ async function primaryDoiFastPath(): Promise<void> {
         reportWorkStage("scan", "Looking up this article…");
         const request: LookupRequest = {type: "FLORA_LOOKUP", dois: [primary]};
         const response = await safeSendMessage<LookupResponse>(request);
+        if (generation !== pageGeneration) return;
         if (!response) {
             rollback();
             return;
@@ -270,76 +273,85 @@ async function checkPageRetractions(dois: DoiString[]): Promise<RetractionRespon
                 const wasCancelled = queuedSignal?.aborted;
                 const queued = {page: passUrl, generation: checkedPageGeneration, sheetGeneration: generation};
                 retractionRetryQueued = queued;
-                try { await waitForWorkToFinish(); }
-                finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
-                if (floraHidden || navigated()) return;
-                if (!wasCancelled && queuedSignal?.aborted) return;
-                resumeAutomaticWork();
-                beginWorkIndicator({stages: ["notices"]});
                 try {
-                    const recovered = await checkPageRetractions([...unavailableRetractionDois]);
-                    if (floraHidden || isWorkCancelled() || navigated()) return;
-                    for (const notice of recovered) refNotices.set(notice.originDoi, notice);
-                    refreshRedacts();
-                    if (isSheets) {
-                        const matched = [...pageState.entries()].flatMap(([doi, state]) =>
-                            state.status === "matched" ? [{doi, result: state.result}] : []);
-                        if (!isSheetsModalSuppressed()) renderSheetsModal(matched, redacts, sheetsModalCallbacks);
-                    } else {
-                        placeTitleNoticePill();
-                        for (const pill of document.querySelectorAll<HTMLElement>(`.${INDICATOR_PILL_CLASS}`)) {
-                            const notice = recovered.find(n => n.originDoi === pill.getAttribute("data-flora-doi"));
-                            if (notice) injectRetractionInfo(pill, notice, {afterend: true});
+                    await waitForWorkToFinish();
+                    if (floraHidden || navigated()) return;
+                    if (!wasCancelled && queuedSignal?.aborted) return;
+                    resumeAutomaticWork();
+                    beginWorkIndicator({stages: ["notices"]});
+                    try {
+                        const recovered = await checkPageRetractions([...unavailableRetractionDois]);
+                        if (floraHidden || isWorkCancelled() || navigated()) return;
+                        for (const notice of recovered) refNotices.set(notice.originDoi, notice);
+                        refreshRedacts();
+                        if (isSheets) {
+                            const matched = [...pageState.entries()].flatMap(([doi, state]) =>
+                                state.status === "matched" ? [{doi, result: state.result}] : []);
+                            if (!isSheetsModalSuppressed()) renderSheetsModal(matched, redacts, sheetsModalCallbacks);
+                        } else {
+                            placeTitleNoticePill();
+                            for (const pill of document.querySelectorAll<HTMLElement>(`.${INDICATOR_PILL_CLASS}`)) {
+                                const notice = recovered.find(n => n.originDoi === pill.getAttribute("data-flora-doi"));
+                                if (notice) injectRetractionInfo(pill, notice, {afterend: true});
+                            }
+                            injectInlineRetractionPills(extractDoiOccurrences(document), new Map(redacts.map(n => [n.originDoi, n])));
+                            updateIndicatorPillBadges(document, pageState, redacts);
+                            lastRenderedPageStateVersion = -1;
+                            await checkPubPeer(Promise.resolve(lastResolvedReferences));
                         }
-                        injectInlineRetractionPills(extractDoiOccurrences(document), new Map(redacts.map(n => [n.originDoi, n])));
-                        updateIndicatorPillBadges(document, pageState, redacts);
-                        lastRenderedPageStateVersion = -1;
-                        await checkPubPeer(Promise.resolve(lastResolvedReferences));
-                    }
-                } finally { endWorkIndicator(); }
+                    } finally { endWorkIndicator(); }
+                } finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
             }},
         });
         return [];
     }
 }
 
+type PageNavigation = EventTarget & {currentEntry?: {key: string}};
+const pageNavigation = (window as Window & {navigation?: PageNavigation}).navigation;
+let lastPageEntryKey = pageNavigation?.currentEntry?.key;
+function syncPageNavigation(): void {
+    const entryKey = pageNavigation?.currentEntry?.key;
+    if (lastUrl === location.href && lastPageEntryKey === entryKey) return;
+    lastUrl = location.href;
+    lastPageEntryKey = entryKey;
+    pageGeneration++;
+    processedDois.clear();
+    seenDois.clear();
+    doiContext.clear();
+    lastArticleFeedbacks = [];
+    articleFeedbacksFetched = false;
+    articlePubPeerUnavailable = false;
+    lastReferenceDoiKey = "";
+    lastRenderedPageStateVersion = -1;
+    pageState.clear();
+    redacts = [];
+    pageNotices = [];
+    refNotices.clear();
+    lastResolvedReferences = [];
+    unavailableRetractionDois.clear();
+    retractionRetryQueued = null;
+    dismissRetractionRetry();
+    pendingNothingToFlag = null;
+    augmentAttempted = false;
+    resetRetractionPills();
+    removeIndicatorPills();
+    resetReferenceMarkers();
+    if (isSheets) {
+        removeSheetsModal();
+    } else {
+        removeSidePanel();
+    }
+}
+pageNavigation?.addEventListener("currententrychange", syncPageNavigation);
+
 async function runScanPass(): Promise<void> {
     if (floraHidden || !canStartAutomaticWork()) return;
-    // Detect full URL change (SPA navigation) — clear state
-    const currentUrl = location.href;
+    syncPageNavigation();
+    const scanPageGeneration = pageGeneration;
     const sheetGeneration = sheetFetchGen;
     const sheetIdentity = isSheets ? currentSheetKey() : null;
-    const sheetChanged = () => isSheets && (sheetGeneration !== sheetFetchGen || sheetIdentity !== currentSheetKey());
-    if (currentUrl !== lastUrl) {
-        lastUrl = currentUrl;
-        pageGeneration++;
-        processedDois.clear();
-        seenDois.clear();
-        doiContext.clear();
-        lastArticleFeedbacks = [];
-        articleFeedbacksFetched = false;
-        articlePubPeerUnavailable = false;
-        lastReferenceDoiKey = "";
-        lastRenderedPageStateVersion = -1;
-        pageState.clear();
-        redacts = [];
-        pageNotices = [];
-        refNotices.clear();
-        lastResolvedReferences = [];
-        unavailableRetractionDois.clear();
-        retractionRetryQueued = null;
-        dismissRetractionRetry();
-        pendingNothingToFlag = null;
-        augmentAttempted = false;
-        resetRetractionPills();
-        removeIndicatorPills();
-        resetReferenceMarkers();
-        if (isSheets) {
-            removeSheetsModal();
-        } else {
-            removeSidePanel();
-        }
-    }
+    const pageChanged = () => scanPageGeneration !== pageGeneration || (isSheets && (sheetGeneration !== sheetFetchGen || sheetIdentity !== currentSheetKey()));
     // Fresh DOM scan pass — resets the per-pass findReferenceContainers memo.
     beginDomScanPass();
     reportWorkStage("scan", "Scanning this page for DOIs…");
@@ -383,6 +395,7 @@ async function runScanPass(): Promise<void> {
         try {
             reportWorkStage("validate", `Checking ${count(dois.length, "DOI")} resolve…`);
             const validation = await validateDOIs(dois);
+            if (pageChanged()) return;
             const before = dois.length;
             dois = dois.filter((doi) => validation.get(doi) !== false);
             const removed = before - dois.length;
@@ -395,6 +408,8 @@ async function runScanPass(): Promise<void> {
             endWorkIndicator();
         }
     }
+
+    if (pageChanged()) return;
 
     // Drop occurrences inside FLoRA's own UI so we don't pill our own panel rows.
     const FLORA_UI_IDS = ["flora-pubpeer-panel", "flora-banner-host", "flora-setup-prompt", "flora-sheets-modal"];
@@ -409,7 +424,7 @@ async function runScanPass(): Promise<void> {
     if (hasDoiChange && dois.length > 0) {
         reportWorkStage("notices", `Checking ${count(dois.length, "DOI")} for retractions…`);
         const notices = await checkPageRetractions(dois);
-        if (sheetChanged()) return;
+        if (pageChanged()) return;
         pageNotices = notices;
         refreshRedacts();
         // A noticed DOI gets one labelled pill, at its most prominent
@@ -475,7 +490,7 @@ async function runScanPass(): Promise<void> {
             reportWorkStage("lookup", `Looking up ${count(newDois.length, "DOI")} in FLoRA…`);
             response = await safeSendMessage<LookupResponse>(request);
         } catch (err) {
-            if (sheetChanged()) return;
+            if (pageChanged()) return;
             if (isWorkCancelled()) {
                 for (const doi of newDois) {
                     processedDois.delete(doi);
@@ -493,7 +508,7 @@ async function runScanPass(): Promise<void> {
             renderErrorBanner("Couldn't load replication data for this page");
             return;
         }
-        if (sheetChanged()) return;
+        if (pageChanged()) return;
         if (!response) {
             // Extension context invalidated (reload/update) — stale script, stop quietly.
             if (!isSheets) placeTitleIndicatorPill();
@@ -585,17 +600,15 @@ async function runScanPass(): Promise<void> {
  */
 function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<ResolvedReference[]> {
     const passUrl = lastUrl;
+    const generation = pageGeneration;
+    const stale = () => location.href !== passUrl || generation !== pageGeneration;
     refsPending++;
     beginWorkIndicator();
     return refsPromise
         .then(async (resolvedRefs) => {
+            // Navigation already released old markers; reused nodes may now belong to a new pass.
+            if (stale()) return [];
             if (floraHidden || isWorkCancelled()) {
-                // Paused, hidden or cancelled while these were resolving — leave the page alone.
-                releaseReferenceEntries(resolvedRefs);
-                return [];
-            }
-            if (location.href !== passUrl) {
-                // Navigated away while resolving — these entries belong to the old page.
                 releaseReferenceEntries(resolvedRefs);
                 return [];
             }
@@ -605,6 +618,7 @@ function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<Re
                 try {
                     reportWorkStage("notices", `Checking ${count(resolvedRefs.length, "reference")} for retractions…`);
                     notices = await checkPageRetractions([...new Set(resolvedRefs.map((r) => r.doi))]);
+                    if (stale() || floraHidden || isWorkCancelled()) return [];
                     for (const n of notices) refNotices.set(n.originDoi, n);
                     refreshRedacts();
                     reportWorkStage("notices", `Marking up ${count(resolvedRefs.length, "reference")}…`);
@@ -707,6 +721,9 @@ function isScholarlyArticlePage(): boolean {
 async function augmentFromTitle(): Promise<void> {
     if (augmentAttempted) return;
     augmentAttempted = true;
+    const generation = pageGeneration;
+    const signal = activeWorkSignal();
+    const stale = () => generation !== pageGeneration || signal?.aborted || floraHidden || isWorkCancelled();
 
     if (!isScholarlyArticlePage()) {
         debugLog("Title augmentation: skipped — page is not a scholarly article");
@@ -724,6 +741,7 @@ async function augmentFromTitle(): Promise<void> {
             sourceUrl: location.href,
             ...extractPageAugmentationMetadata(document),
         }]);
+        if (stale()) return;
         const resolvedDoi = augmented.get(pageTitle);
         debugLog("Title augmentation:", resolvedDoi ? `resolved to ${resolvedDoi}` : "no match", `(title: "${pageTitle}")`);
         if (resolvedDoi) {
@@ -733,6 +751,7 @@ async function augmentFromTitle(): Promise<void> {
                 dois: [resolvedDoi]
             };
             await safeSendMessage(request);
+            if (stale()) return;
 
             // Augmented DOI isn't in `dois` — extractPrimaryDOI won't find it either
             // (it was never on the page), so placeTitleIndicatorPill() never fires
@@ -740,6 +759,7 @@ async function augmentFromTitle(): Promise<void> {
             if (titleEl && !document.querySelector(`.${INDICATOR_PILL_CLASS}[data-flora-title-pill]`)) {
                 try {
                     const notices = await checkPageRetractions([resolvedDoi]);
+                    if (stale()) return;
                     // Same marker as placeTitleIndicatorPill so neither path double-pills.
                     const pill = createIndicatorPill({
                         doi: resolvedDoi,
@@ -848,12 +868,14 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
     const signal = activeWorkSignal() ?? null;
     if (isSheets || floraHidden || isWorkCancelled()) return;
     const passUrl = location.href;
+    const generation = pageGeneration;
+    const navigated = () => location.href !== passUrl || generation !== pageGeneration;
     let indicatorStarted = false;
     const primaryDoi = extractPrimaryDOI(document);
     if (!primaryDoi) return;
     try {
         const resolvedRefs = refsPromise ? await refsPromise : [];
-        if (signal?.aborted) return;
+        if (signal?.aborted || navigated()) return;
 
         // Union resolved refs with on-page reference DOIs for full PubPeer coverage.
         const seen = new Set<DoiString>();
@@ -874,7 +896,7 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         const refKey = [...referenceDois].sort().join("|");
         if (articleFeedbacksFetched && refKey === lastReferenceDoiKey && lastRenderedPageStateVersion === pageStateVersion) return;
 
-        if (floraHidden || isWorkCancelled() || location.href !== passUrl) return;
+        if (floraHidden || isWorkCancelled() || navigated()) return;
         // Keep detached article-provider work in this pass's cancellation/progress lifetime.
         beginWorkIndicator();
         indicatorStarted = true;
@@ -893,7 +915,7 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
             lookupPubPeerForDois(referenceDois, undefined, signal),
             fetchTitleByDoi(primaryDoi, signal),
         ]);
-        if (signal?.aborted || floraHidden || isWorkCancelled() || location.href !== passUrl) return;
+        if (signal?.aborted || floraHidden || isWorkCancelled() || navigated()) return;
         articleFeedbacksFetched = true;
         articlePubPeerUnavailable = article.unavailable;
         lastArticleFeedbacks = article.feedbacks;
@@ -921,11 +943,11 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
             return {doi, title};
         }));
 
-        if (signal?.aborted || floraHidden || isWorkCancelled() || location.href !== passUrl) return;
+        if (signal?.aborted || floraHidden || isWorkCancelled() || navigated()) return;
         lastRenderedPageStateVersion = pageStateVersion;
         renderSidePanel(article.feedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle,
             article.unavailable ? async () => {
-                if (floraHidden || location.href !== passUrl) return;
+                if (floraHidden || navigated()) return;
                 resumeAutomaticWork();
                 articleFeedbacksFetched = false;
                 beginWorkIndicator({stages: ["scan"]});
