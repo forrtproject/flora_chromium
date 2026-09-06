@@ -60,11 +60,22 @@ export class RequestGate {
                 this.nextStartAt = startAt + this.minIntervalMs;
                 if (startAt > now) await sleep(startAt - now);
 
+                // Another in-flight request may have extended the platform's
+                // cooldown while this request waited for its reserved start.
+                while (this.blockedUntil > Date.now()) {
+                    const remaining = this.blockedUntil - Date.now();
+                    if (remaining > MAX_WAIT_MS) {
+                        throw new Error(`${this.name} rate limited (paused for another ${Math.round(remaining / 1000)} s)`);
+                    }
+                    await sleep(remaining);
+                }
+
                 const response = await fetch(url, init);
-                if (response.status !== 429 || attempt > 0) return response;
+                if (response.status !== 429) return response;
 
                 const backoff = parseRetryAfter(response.headers.get("retry-after")) ?? DEFAULT_BACKOFF_MS;
                 this.blockedUntil = Math.max(this.blockedUntil, Date.now() + backoff);
+                if (attempt > 0) return response;
                 if (backoff > MAX_WAIT_MS) {
                     debugWarn(`${this.name}: HTTP 429 with Retry-After ${Math.round(backoff / 1000)} s — pausing this platform until then`);
                     return response;
