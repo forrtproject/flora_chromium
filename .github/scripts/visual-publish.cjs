@@ -20,7 +20,7 @@ module.exports = async ({github, context}) => {
   const captured = run.conclusion === 'success' && !!results;
   const changed = captured ? results.filter(r => r.changed) : [];
   const files = await github.paginate(github.rest.pulls.listFiles, {owner, repo, pull_number});
-  const screenshotPath = /^(tests\/visual\/baselines\/|docs\/img\/).+\.(png|jpe?g|webp)$/i;
+  const screenshotPath = /^(tests\/visual\/(baselines|review-evidence)\/|docs\/img\/).+\.(png|jpe?g|webp)$/i;
   const baselineFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && screenshotPath.test(name)));
   // A PR controls its capture job and artifacts. Changes to that machinery
   // cannot certify themselves as unchanged and bypass human review.
@@ -47,7 +47,7 @@ module.exports = async ({github, context}) => {
   const artifact = artifacts.data.artifacts.find(a => a.name === 'visual-report' && !a.expired);
   const link = artifact ? `${run.html_url}/artifacts/${artifact.id}` : run.html_url;
   const safe = s => String(s).replace(/[^a-zA-Z0-9 .,:()_=!<>-]/g, '').slice(0, 200);
-  const summary = captured ? `${changed.length} of ${results.length} fixtures changed. ${captureFiles.length} capture/configuration files changed; these also require review.\n\n` +
+  const summary = captured ? `${changed.length} of ${results.length} fixtures changed. ${baselineFiles.length} committed screenshots changed. ${captureFiles.length} capture/configuration files changed; these also require review.\n\n` +
     changed.map(r => `- ${safe(r.name)}: ${safe(r.detail)}`).join('\n') :
     'Capture failed or results are missing. Inspect the logs; this is not visual approval.';
   const baselineEvidence = baselineFiles.map(f => {
