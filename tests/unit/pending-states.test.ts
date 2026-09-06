@@ -30,6 +30,7 @@ function deferred<T>() {
 
 describe("pending lookups are not shown as negatives", () => {
     beforeEach(() => {
+        mockLookupPubPeer.mockReset();
         mockGetSettings.mockResolvedValue({ email: "test@example.com", citationStyle: "apa" });
         mockLookupPubPeer.mockReturnValue(new Promise(() => {}));
         vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
@@ -58,7 +59,7 @@ describe("pending lookups are not shown as negatives", () => {
         const oa = deferred<OpenAccessStatus | null>();
         const pill = createIndicatorPill({ doi: DOI, oaStatus: oa.promise, retraction: null });
 
-        oa.resolve(null);
+        oa.resolve({isOa: false, url: null});
         await vi.waitFor(() =>
             expect(rowText(pill, "data-flora-oa-row")).toContain("Not confirmed open access")
         );
@@ -72,6 +73,27 @@ describe("pending lookups are not shown as negatives", () => {
         await vi.waitFor(() =>
             expect(rowText(pill, "data-flora-oa-row")).not.toContain("Checking")
         );
+    });
+
+    it("offers Retry after an OA outage and replaces it with the successful result", async () => {
+        const pill = createIndicatorPill({doi: DOI, oaStatus: Promise.resolve(null), retraction: null});
+        document.body.appendChild(pill);
+        await vi.waitFor(() => expect(rowText(pill, "data-flora-oa-row")).toContain("Unavailable"));
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ok: true, json: async () => ({is_oa: true, best_oa_location: {url: "https://example.org/free"}})}));
+        pill.querySelector<HTMLButtonElement>("[data-flora-oa-row] button")!.focus();
+        pill.querySelector<HTMLButtonElement>("[data-flora-oa-row] button")!.click();
+        await vi.waitFor(() => expect(rowText(pill, "data-flora-oa-row")).toContain("Free full text available"));
+        expect(pill.querySelector("[data-flora-oa-row] button")).toBeNull();
+        expect(pill.querySelector("[data-flora-oa-row]")!.contains(document.activeElement)).toBe(true);
+    });
+
+    it("offers Retry for unavailable PubPeer data but treats a successful empty reply as no discussion", async () => {
+        mockLookupPubPeer.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(null);
+        const pill = createIndicatorPill({doi: DOI, oaStatus: null, retraction: null});
+        await vi.waitFor(() => expect(rowText(pill, "data-flora-pubpeer-row")).toContain("Unavailable"));
+        pill.querySelector<HTMLButtonElement>("[data-flora-pubpeer-row] button")!.click();
+        await vi.waitFor(() => expect(rowText(pill, "data-flora-pubpeer-row")).toContain("No discussion found"));
+        expect(mockLookupPubPeer).toHaveBeenCalledTimes(2);
     });
 
     it("shows no OA row pending state when no lookup was started", () => {

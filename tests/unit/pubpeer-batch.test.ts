@@ -89,8 +89,11 @@ describe("lookupPubPeerForDoi batching", () => {
     expect(second?.total_comments).toBe(3);
   });
 
-  it("resolves to null rather than rejecting when the request fails", async () => {
+  it("rejects failures without caching them, so a later retry can succeed", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(lookupPubPeerForDoi("10.1234/a")).rejects.toThrow("PubPeer unavailable");
+    fetchMock.mockResolvedValue({ok: true, status: 200, json: async () => ({feedbacks: []})});
     await expect(lookupPubPeerForDoi("10.1234/a")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

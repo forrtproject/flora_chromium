@@ -285,6 +285,8 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     }
     setWorkItems(uniqueDois.map((doi) => workItem(doi, titleByDoi.get(doi) ?? doi, doi)));
     const request: LookupRequest = {type: "FLORA_LOOKUP", dois: uniqueDois};
+    for (const doi of uniqueDois) lookupState.set(doi, {status: "loading"});
+    refreshBadges();
 
     try {
         const response = await safeSendMessage<LookupResponse>(request);
@@ -293,9 +295,13 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
 
         let badgedCount = 0;
         for (const {doi, source} of resolved) {
-            if (response.results[doi]) {
+            if (response.errors[doi]) {
+                lookupState.set(doi, {status: "error", message: response.errors[doi]});
+            } else if (response.results[doi]) {
                 lookupState.set(doi, {status: "matched", result: response.results[doi], source});
                 badgedCount++;
+            } else {
+                lookupState.set(doi, {status: "no-match"});
             }
         }
         for (const doi of uniqueDois) {
@@ -311,6 +317,9 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         refreshBadges();
         debugLog(`${label}: Rendered`, badgedCount, "badge(s)");
     } catch (err) {
+        if (searchHidden || isWorkCancelled()) return;
+        for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "FORRT unavailable"});
+        refreshBadges();
         debugLog(`${label}: Lookup failed:`, err);
     }
 }

@@ -78,9 +78,11 @@ interface Fixture {
   name: string;
   /** Path served by the static server, relative to a fixtures root. */
   urlPath: string;
+  outage?: boolean;
 }
 
 const FIXTURES: Fixture[] = [
+  {name: "provider-unavailable", urlPath: "provider-unavailable.html", outage: true},
   // New visual fixtures (served from tests/visual/fixtures).
   { name: "ref-list-flex", urlPath: "ref-list-flex.html" },
   { name: "ref-list-grid", urlPath: "ref-list-grid.html" },
@@ -169,9 +171,13 @@ async function reseedBeforeFixture(target: Target): Promise<void> {
 }
 
 // ── Per-page request interception (page context) ────────────────────────────
-async function installPageInterception(page: Page): Promise<void> {
+async function installPageInterception(page: Page, outage = false): Promise<void> {
   await page.setRequestInterception(true);
   page.on("request", (req) => {
+    if (outage && ["pubpeer.com", "api.unpaywall.org"].includes(new URL(req.url()).hostname)) {
+      void req.respond({status: 503, body: "Provider unavailable"});
+      return;
+    }
     const verdict = classifyPageRequest(req.url());
     if (verdict === "allow") {
       req.continue().catch(() => {});
@@ -237,7 +243,7 @@ async function captureFixture(
   const page = await browser.newPage();
   try {
     await page.setViewport(VIEWPORT);
-    await installPageInterception(page);
+    await installPageInterception(page, fixture.outage);
 
     // The content script defers all work until the tab is visible — make it the
     // foreground tab (the extension opens a walkthrough tab on install).
@@ -269,6 +275,11 @@ async function captureFixture(
     // every glyph on the page.
     await page.evaluate(() => (document as Document).fonts.ready.then(() => undefined));
     await waitForSettle(page);
+    if (fixture.outage) {
+      await page.waitForSelector(".flora-indicator-pill", {timeout: 12000});
+      await page.click(".flora-indicator-pill");
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
 
     if (process.env.VR_DEBUG) {
       const dbg = await page.evaluate(() => ({
