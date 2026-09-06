@@ -283,7 +283,10 @@ async function captureFixture(
           .find(el => getComputedStyle(el).display !== "none");
         return !!popover && ["data-flora-oa-row", "data-flora-pubpeer-row"].every(attr => {
           const row = popover.querySelector(`[${attr}]`);
-          return row?.textContent?.includes("Unavailable") && row.querySelector("button")?.textContent === "Retry";
+          const subtitle = row?.querySelector("[data-flora-row-sub]")?.textContent?.trim();
+          // Capture both the base UI and the changed UI once their provider
+          // results settle; requiring Retry here would reject older versions.
+          return !!subtitle && !/^(?:Checking(?:…|\.\.\.)?|…|\.\.\.)$/.test(subtitle);
         });
       }, {timeout: 12000});
     }
