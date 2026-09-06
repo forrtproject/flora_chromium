@@ -18,8 +18,6 @@ describe("active Sheets source", () => {
         const tab = {spreadsheetId: "book", gid: "42"};
         vi.mocked(safeSendMessage).mockResolvedValueOnce({error: "HTTP 403"});
         await expect(fetchSheetCsv(tab)).rejects.toThrow("HTTP 403");
-        vi.mocked(safeSendMessage).mockResolvedValueOnce({csv: "<!doctype html><html>Sign in</html>"});
-        await expect(fetchSheetCsv(tab)).rejects.toThrow("sign-in or error page");
         vi.mocked(safeSendMessage).mockResolvedValueOnce({csv: ""});
         await expect(fetchSheetCsv(tab)).resolves.toBe("");
         expect(safeSendMessage).toHaveBeenLastCalledWith({type: "FLORA_SHEET_FETCH", ...tab});

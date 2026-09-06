@@ -23,9 +23,5 @@ export async function fetchSheetCsv(tab: SheetTab): Promise<string> {
     if (!response || response.error || typeof response.csv !== "string") {
         throw new Error(response?.error ?? "Sheet export unavailable");
     }
-    // Google can redirect an inaccessible export to a sign-in page with HTTP 200.
-    if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(response.csv)) {
-        throw new Error("Sheet export returned a sign-in or error page");
-    }
     return response.csv;
 }

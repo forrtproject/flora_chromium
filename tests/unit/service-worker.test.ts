@@ -2,6 +2,7 @@ import {describe, it, expect, vi, beforeEach} from "vitest";
 import type {
     LookupRequest,
     LookupResponse,
+    SheetFetchResponse,
     RetractionCheckResponse,
 } from "../../src/shared/messages";
 import type {RetractionMaps} from "../../src/shared/data-extract";
@@ -175,6 +176,19 @@ describe("service-worker", () => {
     function landRetractionSync(map: RetractionMaps): void {
         for (const fn of storageChangeHandlers) fn({[RET_MAP_KEY]: {newValue: map}}, "local");
     }
+
+    it("rejects HTML export responses while accepting HTML-looking CSV cells", async () => {
+        const fetchMock = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response("<html><body>Sign in</body></html>", {headers: {"content-type": "text/html; charset=utf-8"}}))
+            .mockResolvedValueOnce(new Response("<html>\n10.1234/paper", {headers: {"content-type": "text/csv"}}));
+        const getSheet = () => new Promise<SheetFetchResponse>(resolve => {
+            messageHandler({type: "FLORA_SHEET_FETCH", spreadsheetId: "book", gid: "42"}, {}, resolve as (r: unknown) => void);
+        });
+        try {
+            expect(await getSheet()).toMatchObject({csv: null, error: "Sheet export returned a sign-in or error page"});
+            expect(await getSheet()).toMatchObject({csv: "<html>\n10.1234/paper", error: null});
+        } finally { fetchMock.mockRestore(); }
+    });
 
     it("returns results for matched DOIs", async () => {
         mockLookupDOIs.mockResolvedValue(
