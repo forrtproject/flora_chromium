@@ -840,6 +840,11 @@ const SHEET_UNAVAILABLE = "Full sheet unavailable — only visible cells could b
 async function fetchSheetDois(): Promise<void> {
     const parsed = parseSheetsUrl(location.href);
     if (!parsed) return;
+    await waitUntilVisible();
+    const current = parseSheetsUrl(location.href);
+    if (floraHidden || !canStartAutomaticWork() || !current ||
+        current.spreadsheetId !== parsed.spreadsheetId || current.gid !== parsed.gid) return;
+
     const alert = document.getElementById("flora-alert-toast");
     if (alert?.textContent?.includes(SHEET_UNAVAILABLE)) alert.remove();
     const myGen = sheetFetchGen;
@@ -863,7 +868,7 @@ async function fetchSheetDois(): Promise<void> {
     if (unavailable) {
         showToast(SHEET_UNAVAILABLE, {
             tone: "error",
-            action: {label: "Retry", onClick: () => fetchSheetDois()},
+            action: {label: "Retry", onClick: () => { resumeAutomaticWork(); return fetchSheetDois(); }},
         });
     } else if (sheetCsvDois.length === 0 && extractDOIs(document).length === 0) {
         showToast("No DOIs found in this sheet tab.");
