@@ -1,6 +1,6 @@
 import {debugWarn} from "./debug";
 import {getSettings} from "./settings";
-import {RET_MAP_KEY, RET_BUDGET_EVICTED_SYNC_KEY} from "./data-extract";
+import {RET_MAP_KEY, RET_BUDGET_EVICTED_SYNC_KEY, withRetractionStorageUpdate} from "./data-extract";
 
 // Only disposable provider data belongs to this budget. Preferences, the
 // debug log and pending reports must never be evicted to make room for it.
@@ -51,17 +51,21 @@ export async function enforceCacheBudget(bytes: number): Promise<void> {
       remove.push(key);
       estimatedFreed += encoder.encode(key + JSON.stringify(all[key])).length;
     }
-    if (remove.includes(RET_MAP_KEY)) {
-      // A refresh may have landed since the initial budget snapshot. Associate
-      // eviction with its current generation, not an older snapshot timestamp.
-      const {synctime} = await chrome.storage.local.get("synctime");
-      if (typeof synctime === "number" && Number.isFinite(synctime) && synctime > 0) {
-        // Missing data alone must still trigger recovery; record deliberate
-        // eviction before removal so checks can keep the weekly schedule.
-        await chrome.storage.local.set({[RET_BUDGET_EVICTED_SYNC_KEY]: synctime});
+    const evict = async () => {
+      if (remove.includes(RET_MAP_KEY)) {
+        // A refresh may have landed since the initial budget snapshot. Associate
+        // eviction with its current generation, not an older snapshot timestamp.
+        const {synctime} = await chrome.storage.local.get("synctime");
+        if (typeof synctime === "number" && Number.isFinite(synctime) && synctime > 0) {
+          // Missing data alone must still trigger recovery; record deliberate
+          // eviction before removal so checks can keep the weekly schedule.
+          await chrome.storage.local.set({[RET_BUDGET_EVICTED_SYNC_KEY]: synctime});
+        }
       }
-    }
-    await chrome.storage.local.remove(remove);
+      await chrome.storage.local.remove(remove);
+    };
+    if (remove.includes(RET_MAP_KEY)) await withRetractionStorageUpdate(evict);
+    else await evict();
     // Check the actual storage accounting, rather than relying on estimates.
     used = cursor < ordered.length ? await chrome.storage.local.getBytesInUse(ordered.slice(cursor)) : 0;
   }

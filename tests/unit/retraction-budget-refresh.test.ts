@@ -85,6 +85,39 @@ describe("retraction refresh after cache budget eviction", () => {
         expect(remoteRequests).toBe(0);
     });
 
+    it("serializes publication with an eviction already between marker write and removal", async () => {
+        vi.useRealTimers();
+        const startedAt = Date.now();
+        store = {[RET_MAP_KEY]: map, synctime: startedAt - WEEK - 1};
+        let reachedRemoval!: () => void;
+        let releaseRemoval!: () => void;
+        const reached = new Promise<void>(resolve => {reachedRemoval = resolve;});
+        const released = new Promise<void>(resolve => {releaseRemoval = resolve;});
+        vi.mocked(chrome.storage.local.remove).mockImplementationOnce(async keys => {
+            reachedRemoval();
+            await released;
+            for (const key of Array.isArray(keys) ? keys : [keys]) delete store[key];
+        });
+        const {enforceCacheBudget} = await import("../../src/shared/cache-budget");
+        const {syncRetractionsInfo} = await import("../../src/background/service-worker");
+        const eviction = enforceCacheBudget(40);
+        await reached;
+        let published = false;
+        const refresh = syncRetractionsInfo().then(() => {published = true;});
+        try {
+            // Let the fetch and JSON microtasks complete while removal is held.
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(remoteRequests).toBe(1); // network work is outside the storage lock
+            expect(published).toBe(false);
+        } finally {
+            releaseRemoval();
+            await Promise.all([eviction, refresh]);
+        }
+        expect(store[RET_MAP_KEY]).toEqual(map);
+        expect(store.synctime).toBeGreaterThanOrEqual(startedAt);
+        expect(store[RET_BUDGET_EVICTED_SYNC_KEY]).toBeUndefined();
+    });
+
     it.each(["missing", "empty", "old-marker"])("still repairs a %s map without matching budget eviction", async kind => {
         store.synctime = NOW;
         if (kind === "empty") {

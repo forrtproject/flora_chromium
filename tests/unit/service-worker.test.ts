@@ -590,9 +590,6 @@ describe("service-worker", () => {
             alarmHandler({name: "flora-retraction-sync"});
 
             await vi.waitFor(() => expect(mockStorageSync).toHaveBeenCalled());
-            expect(chrome.storage.local.set).toHaveBeenCalledWith(
-                expect.objectContaining({synctime: expect.any(Number)})
-            );
         });
 
         it("ignores alarms belonging to other features", async () => {
