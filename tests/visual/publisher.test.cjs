@@ -126,5 +126,10 @@ test('visual publication policy', async t => {
     assert.match(bounded.body,/Review all screenshot files/);
     const fullBody = await scenario({files:longFiles,authorBody:'a'.repeat(64000)});
     assert.equal(fullBody.state,'pending'); assert.ok(fullBody.body.length<=65000); assert.match(fullBody.body,/additional screenshot previews omitted/);
+    for (const failure of [false, true]) {
+      const oversized = await scenario({changed:true, failure, authorBody:'a'.repeat(65000)});
+      assert.equal(oversized.body, undefined); // no update: preserve the author's description
+      assert.equal(oversized.state, failure ? 'failure' : 'pending');
+    }
   });
 });
