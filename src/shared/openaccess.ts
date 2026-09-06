@@ -1,10 +1,11 @@
-import {fetchWithDeadline} from "@shared/work-cancellation";
+import {activeWorkSignal} from "@shared/work-cancellation";
 // Open Access status for a DOI via Unpaywall, cached in chrome.storage.local.
 // Used to surface a lock/unlock icon next to the DOIs we inject on the page.
 
 import { getSettings } from "./settings";
 import { BlobCache } from "./blob-cache";
 import { debugWarn } from "./debug";
+import { RequestGate } from "./request-gate";
 
 export interface OpenAccessLocation {
     /** Free full-text URL — the PDF when the location offers one. */
@@ -75,6 +76,10 @@ const OA_CACHE = new BlobCache<OpenAccessStatus & {checkedAt?: number}>({
     ttlMs: 30 * 24 * 60 * 60 * 1000, // 30 days — OA status changes rarely
 });
 
+// One gate per extension context; repeated DOI elements share the same lookup.
+const UNPAYWALL_GATE = new RequestGate("Unpaywall", 4);
+const pending = new Map<string, {signal?: AbortSignal; request: Promise<OpenAccessStatus | null>}>();
+
 async function getUserEmail(): Promise<string> {
     const { email } = await getSettings();
     return email;
@@ -86,15 +91,29 @@ async function getUserEmail(): Promise<string> {
  * callers can choose to render nothing rather than a misleading "no access".
  */
 export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | null> {
+    const signal = activeWorkSignal();
     const cached = await OA_CACHE.get(doi);
     if (cached && (!cached.notIndexed || Date.now() - (cached.checkedAt ?? 0) < 5 * 60 * 1000)) return cached;
 
     const email = await getUserEmail();
     if (!email) return null;
 
+    // Include email so correcting it can retry immediately while an older request
+    // is still running. Provider results themselves are independent of email.
+    const key = JSON.stringify([doi, email]);
+    const existing = pending.get(key);
+    if (existing && existing.signal === signal && !signal?.aborted) return existing.request;
+    const request = requestOpenAccess(doi, email, signal).finally(() => {
+        if (pending.get(key)?.request === request) pending.delete(key);
+    });
+    pending.set(key, {signal, request});
+    return request;
+}
+
+async function requestOpenAccess(doi: string, email: string, signal?: AbortSignal): Promise<OpenAccessStatus | null> {
     try {
-        const resp = await fetchWithDeadline(
-            `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
+        const resp = await UNPAYWALL_GATE.fetch(
+            `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`, {signal}
         );
         if (resp.status === 404) {
             const status = {isOa: false, url: null, notIndexed: true, checkedAt: Date.now()};
