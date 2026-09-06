@@ -132,7 +132,8 @@ export async function renderSetupPrompt(): Promise<void> {
       <div style="padding:12px 14px;">
         <p style="margin:0 0 6px;font-size:13px;color:#3c4043;line-height:1.45;">
           Add an email to enable title matching and open-access lookups.
-          Replication, retraction and PubPeer checks already work without it.
+          DOI-based replication, retraction and PubPeer checks work without it.
+          Settings explains how Crossref, OpenAlex, Unpaywall and NCBI receive the email.
         </p>
         <button class="flora-setup-open" style="
           all:unset;cursor:pointer;display:block;width:100%;text-align:center;
