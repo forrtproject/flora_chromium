@@ -761,7 +761,7 @@ function extractPageAugmentationMetadata(doc: Document): Omit<DoiAugmentRequest,
 }
 
 async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): Promise<void> {
-    const signal = activeWorkSignal();
+    const signal = activeWorkSignal() ?? null;
     if (isSheets) return;
     const passUrl = location.href;
     const primaryDoi = extractPrimaryDOI(document);
@@ -795,7 +795,7 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
             : lookupPubPeer([primaryDoi], [passUrl], signal).then(
                 feedbacks => ({feedbacks, unavailable: false}),
                 err => {
-                    debugWarn("Article PubPeer data unavailable —", err);
+                    if (!signal?.aborted) debugWarn("Article PubPeer data unavailable —", err);
                     return {feedbacks: [] as PubPeerFeedback[], unavailable: true};
                 },
             );
@@ -845,7 +845,7 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
             } : undefined);
 
     } catch (err) {
-        debugWarn("PubPeer panel: lookup or render failed —", err);
+        if (!signal?.aborted) debugWarn("PubPeer panel: lookup or render failed —", err);
     }
 }
 

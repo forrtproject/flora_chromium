@@ -649,7 +649,7 @@ const TITLE_CACHE = new BlobCache<{ title: string | null }>({
  * OpenAlex. Cached in chrome.storage.local since a published title never
  * changes. Returns null when neither service has the DOI.
  */
-export async function fetchTitleByDoi(doi: string, signal: AbortSignal | undefined = activeWorkSignal()): Promise<string | null> {
+export async function fetchTitleByDoi(doi: string, signal: AbortSignal | null | undefined = activeWorkSignal()): Promise<string | null> {
     const cached = await TITLE_CACHE.get(doi);
     if (cached) return cached.title;
 
@@ -672,7 +672,7 @@ export async function fetchTitleByDoi(doi: string, signal: AbortSignal | undefin
         // Crossref failed — fall through to OpenAlex
     }
 
-    if (signal?.aborted) return null;
+    if (signal?.aborted && !title) return null;
     if (!title) {
         try {
             const response = await openalexGate.fetch(`${OPENALEX_BASE}/doi:${encodedDoi}?select=title`, {signal: signal ?? null});

@@ -77,6 +77,16 @@ describe("lookupPubPeerForDoi batching", () => {
     expect((await retry)?.total_comments).toBe(3);
   });
 
+  it("does not attach an idle lookup to a scan started during its batching window", async () => {
+    vi.useFakeTimers();
+    const pending = lookupPubPeerForDoi("10.1234/a");
+    beginCancellableWork();
+    cancelWork();
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await pending)?.total_comments).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces concurrent single-DOI lookups into one request", async () => {
     const [a, b, c] = await Promise.all([
       lookupPubPeerForDoi("10.1234/a"),
