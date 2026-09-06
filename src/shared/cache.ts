@@ -47,7 +47,7 @@ export class LocalCache<T> {
       const storageKey = this.storageKey(key);
       const entry = raw[storageKey] as CachedEntry<T> | undefined;
       if (!entry) continue;
-      if (entry.expiresAt !== null && now > entry.expiresAt) {
+      if (entry.expiresAt !== null && now >= entry.expiresAt) {
         stale.push(storageKey);
         continue;
       }
@@ -77,7 +77,7 @@ export class LocalCache<T> {
 
     if (!entry) return undefined;
 
-    if (entry.expiresAt !== null && Date.now() > entry.expiresAt) {
+    if (entry.expiresAt !== null && Date.now() >= entry.expiresAt) {
       await chrome.storage.local.remove(storageKey);
       return undefined;
     }

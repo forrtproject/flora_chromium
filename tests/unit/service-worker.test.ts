@@ -238,9 +238,8 @@ describe("service-worker", () => {
         expect(response.results["10.1038/nature12373"]).toEqual(MOCK_RESULT);
     });
 
-    it("re-queries no-match DOIs (does not negative-cache)", async () => {
-        // FORRT may add a record later, so an unmatched DOI must hit the API
-        // again on the next request rather than being suppressed by the cache.
+    it("reuses confirmed no-matches with a five-minute TTL", async () => {
+        // Repeated scans reuse a successful empty answer, but only briefly.
         mockLookupDOIs.mockResolvedValue(new Map());
 
         await sendMessage({
@@ -253,9 +252,32 @@ describe("service-worker", () => {
             type: "FLORA_LOOKUP",
             dois: [doi("10.9999/not.yet.in.forrt")],
         });
-        // Second request re-hits the API instead of serving a cached no-match.
-        expect(mockLookupDOIs).toHaveBeenCalledTimes(2);
+        expect(mockLookupDOIs).toHaveBeenCalledTimes(1);
+        expect(cacheSetCalls).toContainEqual({key: "10.9999/not.yet.in.forrt", data: null, ttlMs: 5 * 60_000});
         expect(Object.keys(response.results)).toHaveLength(0);
+    });
+
+    it("caches only confirmed misses in a partial failure and retries failed DOIs", async () => {
+        const miss = doi("10.9999/confirmed-miss");
+        const failed = doi("10.9999/failed");
+        mockLookupDOIs.mockImplementationOnce(async (_dois, errors) => {
+            errors[failed] = "Provider unavailable";
+            return new Map();
+        }).mockResolvedValueOnce(new Map([[failed, MOCK_RESULT]]));
+        const first = await sendMessage({type: "FLORA_LOOKUP", dois: [miss, failed]});
+        expect(first.errors).toEqual({[failed]: "Provider unavailable"});
+        expect(cacheSetCalls).toEqual([{key: miss, data: null, ttlMs: 300_000}]);
+        const retry = await sendMessage({type: "FLORA_LOOKUP", dois: [miss, failed]});
+        expect(mockLookupDOIs.mock.calls[1][0]).toEqual([failed]);
+        expect(retry.results[failed]).toEqual(MOCK_RESULT);
+    });
+
+    it("ignores legacy null entries in the matched-result cache", async () => {
+        const key = doi("10.9999/legacy-miss");
+        cacheStore.set(`flora:${key}`, null);
+        mockLookupDOIs.mockResolvedValueOnce(new Map([[key, MOCK_RESULT]]));
+        expect((await sendMessage({type: "FLORA_LOOKUP", dois: [key]})).results[key]).toEqual(MOCK_RESULT);
+        expect(mockLookupDOIs).toHaveBeenCalledOnce();
     });
 
     it("returns errors on API failure", async () => {

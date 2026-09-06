@@ -17,6 +17,10 @@ import {debugError, debugLog, debugWarn, isDebugEnabledAsync} from "@shared/debu
 
 // The worker-wide manager budgets all providers together.
 const cache = new LocalCache<ReplicationResult>("flora", 0);
+// A separate namespace keeps legacy, potentially permanent null entries ignored.
+// Both caches share the worker-wide provider budget through the flora: prefix.
+const noMatchCache = new LocalCache<never>("flora:no-match", 0);
+const NO_MATCH_TTL_MS = 5 * 60_000;
 installCacheBudget();
 
 // The worker owns the debug log: its own entries are stored directly, and
@@ -316,14 +320,14 @@ async function handleLookup(dois: DoiString[], signal?: AbortSignal): Promise<Lo
     const errors: Record<string, string> = {};
     const toFetch: DoiString[] = [];
 
-    // Check cache and in-flight requests. We only persist matched results, so a
-    // truthy cache hit is a real result. A null entry (legacy negative cache) or
-    // a miss both fall through to re-query, so newly added FORRT data surfaces.
-    const cached = await cache.getMany(dois);
+    // Confirmed no-matches expire after five minutes; provider errors are never cached.
+    const [cached, noMatches] = await Promise.all([cache.getMany(dois), noMatchCache.getMany(dois)]);
     for (const doi of dois) {
         const hit = cached.get(doi);
         if (hit) {
             results[doi] = hit;
+        } else if (noMatches.has(doi)) {
+            continue;
         } else if (inflight.has(doi) && !inflight.get(doi)!.aborted) {
             const shared = await inflight.get(doi)!.subscribe(signal);
             const r = shared.results.get(doi);
@@ -346,11 +350,14 @@ async function handleLookup(dois: DoiString[], signal?: AbortSignal): Promise<Lo
             const apiResults = await lookupDOIs(toFetch, batchErrors, transportSignal);
             try {
                 const writes: Array<[string, ReplicationResult]> = [];
+                const misses: Array<[string, null]> = [];
                 for (const doi of toFetch) {
                     const result = apiResults.get(doi);
                     if (result) writes.push([doi, result]);
+                    else if (!Object.hasOwn(batchErrors, doi)) misses.push([doi, null]);
                 }
                 await cache.setMany(writes, MONTH_MS);
+                await noMatchCache.setMany(misses, NO_MATCH_TTL_MS);
             } catch (err) {
                 debugWarn("Lookup: cache write failed —", err);
             }

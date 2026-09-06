@@ -240,6 +240,8 @@ never included.
 6. On **search-results sites** (Google Scholar, OpenAlex, Semantic Scholar, PubMed, Europe PMC, Scopus, EBSCOhost), an indicator panel is injected into each result row where the site adapter's stylesheet places it (Scholar: the right-side `.gs_ggs` column, created if absent; OpenAlex: a right-hand column beside the result text; Semantic Scholar: beside the TLDR/abstract; PubMed: beside the authors/journal/PMID block; Europe PMC: a right-hand column below the title; EBSCOhost: beside the By/In metadata line, above the abstract; Scopus: the right end of the result's columns row in list view and in the title cell in table view).
 7. The content-general script detects **SPA navigations** (URL changes) and re-scans the page automatically.
 
+Confirmed FORRT no-matches are cached locally for five minutes to avoid repeated requests during scans. Newly added records may take up to five minutes to appear on a subsequent lookup; provider failures are not cached. These entries share the configured provider cache budget.
+
 ## Data sources & credits
 
 - **Replication / reproduction data** — [FORRT Replication Database](https://forrt.org/replication-database/).
