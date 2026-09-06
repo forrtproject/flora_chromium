@@ -81,6 +81,9 @@ export function startDomListener({scanWholePage, getLastUrl}: DomListenerOptions
     document.addEventListener("visibilitychange", () => {
         if (document.hidden || !missedWhileHidden) return;
         missedWhileHidden = false;
+        clearTimeout(debounceTimer);
+        pendingFullScan = false;
+        pendingNodes = [];
         scanWholePage();
     });
     return observer;
