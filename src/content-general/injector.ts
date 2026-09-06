@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import type { DoiString, LookupState, ReplicationResult, ReplicationEntry, OriginalEntry, DoiContext } from "../shared/types";
 import type { PubPeerFeedback } from "../shared/pubpeer-api";
 import { debugLog, debugWarn } from "../shared/debug";
@@ -1419,7 +1420,7 @@ export function renderSidePanel(
     await Promise.allSettled([...oaPlaceholders].map(async ([doi, placeholder]) => {
       try {
         if (host.dataset.floraPanelStale === "1") return;
-        const resp = await fetch(
+        const resp = await fetchWithDeadline(
           `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
         );
         if (!resp.ok) return;

@@ -407,6 +407,8 @@ describe("progress toast", () => {
         expect(isWorkCancelled()).toBe(true);
         expect(toast()).toBeNull();
         endWorkIndicator();
+        expect(isWorkCancelled()).toBe(true);
+        beginWorkIndicator();
         expect(isWorkCancelled()).toBe(false);
     });
 

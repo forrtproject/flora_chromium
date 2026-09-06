@@ -375,6 +375,7 @@ async function runScanPass(): Promise<void> {
             reportWorkStage("lookup", `Looking up ${count(newDois.length, "DOI")} in FLoRA…`);
             response = await safeSendMessage<LookupResponse>(request);
         } catch (err) {
+            if (isWorkCancelled()) return;
             debugError("Replication lookup failed:", err);
             if (!isSheets) placeTitleIndicatorPill();
             renderErrorBanner("Couldn't load replication data for this page");

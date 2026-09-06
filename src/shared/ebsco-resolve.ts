@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "./work-cancellation";
 // EBSCOhost record id → DOI, one request per record, four in flight. Runs in
 // the content script: the endpoint is same-origin on research.ebsco.com and
 // authenticated by the session cookie, so no host permission and no worker hop
@@ -61,7 +62,7 @@ async function fetchDoi(recordId: string, profile: string, fetchImpl: typeof fet
 export async function resolveEbscoIds(
     rawIds: string[],
     profile: string | null = ebscoProfileFromPath(location.pathname),
-    fetchImpl: typeof fetch = fetch
+    fetchImpl: typeof fetch = fetchWithDeadline
 ): Promise<Map<string, DoiString | null>> {
     const results = new Map<string, DoiString | null>();
     const ids = [...new Set(rawIds.map(normaliseEbscoRecordId).filter((id): id is string => id !== null))];

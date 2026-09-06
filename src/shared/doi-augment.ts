@@ -361,12 +361,12 @@ function logQueryOutcome(
  * Query Crossref for a title, returning every candidate that clears the title
  * threshold (with author/year/URL metadata for later tie-breaking).
  */
-async function queryCrossref(request: DoiAugmentRequest, email: string): Promise<DoiCandidate[]> {
+async function queryCrossref(request: DoiAugmentRequest, email: string, signal?: AbortSignal): Promise<DoiCandidate[]> {
     const {title} = request;
     const cleaned = cleanTitleForSearch(title);
     const url = `${CROSSREF_BASE}?query.title=${encodeURIComponent(cleaned)}&rows=5&select=DOI,title,author,issued,published-print,published-online,published,URL,link&mailto=${encodeURIComponent(email)}`;
     debugLog(`Augment [crossref] query: "${cleaned}"`);
-    const response = await crossrefGate.fetch(url);
+    const response = await crossrefGate.fetch(url, {signal});
     if (!response.ok) throw new Error(`Crossref HTTP ${response.status}`);
 
     const data = (await response.json()) as {
@@ -420,13 +420,13 @@ async function queryCrossref(request: DoiAugmentRequest, email: string): Promise
  * Query OpenAlex for a title, returning every candidate that clears the title
  * threshold (with author/year/URL metadata for later tie-breaking).
  */
-async function queryOpenAlex(request: DoiAugmentRequest, email: string): Promise<DoiCandidate[]> {
+async function queryOpenAlex(request: DoiAugmentRequest, email: string, signal?: AbortSignal): Promise<DoiCandidate[]> {
     const {title} = request;
     const cleaned = cleanTitleForSearch(title);
     const url = `${OPENALEX_BASE}?filter=title.search:${encodeURIComponent(cleaned)}&select=id,doi,title,publication_year,authorships,primary_location,locations&per_page=5&mailto=${encodeURIComponent(email)}`;
 
     debugLog(`Augment [openalex] query: "${cleaned}"`);
-    const response = await openalexGate.fetch(url);
+    const response = await openalexGate.fetch(url, {signal});
     if (!response.ok) throw new Error(`OpenAlex HTTP ${response.status}`);
 
     const data = (await response.json()) as {
@@ -485,9 +485,9 @@ async function queryOpenAlex(request: DoiAugmentRequest, email: string): Promise
  * Returns a Map of original title -> resolved DoiString (or null if not found).
  */
 export async function augmentDOIs(
-    inputs: Array<string | DoiAugmentRequest>
+    inputs: Array<string | DoiAugmentRequest>, signal?: AbortSignal
 ): Promise<Map<string, DoiString | null>> {
-    const detailed = await augmentDOIsDetailed(inputs);
+    const detailed = await augmentDOIsDetailed(inputs, signal);
     return new Map([...detailed].map(([title, r]) => [title, r.doi] as const));
 }
 
@@ -503,7 +503,7 @@ export interface AugmentOutcome {
 
 /** As `augmentDOIs`, but reports which platform produced each DOI. */
 export async function augmentDOIsDetailed(
-    inputs: Array<string | DoiAugmentRequest>
+    inputs: Array<string | DoiAugmentRequest>, signal?: AbortSignal
 ): Promise<Map<string, AugmentOutcome>> {
     const results = new Map<string, AugmentOutcome>();
     if (inputs.length === 0) return results;
@@ -567,8 +567,9 @@ export async function augmentDOIsDetailed(
         const order: AugmentPlatform[] = index % 2 === 0 ? ["crossref", "openalex"] : ["openalex", "crossref"];
         const outcomes: Partial<Record<AugmentPlatform, PromiseSettledResult<DoiCandidate[]>>> = {};
         for (const platform of order) {
+            signal?.throwIfAborted();
             const [outcome] = await Promise.allSettled([
-                platform === "crossref" ? queryCrossref(request, email) : queryOpenAlex(request, email),
+                platform === "crossref" ? queryCrossref(request, email, signal) : queryOpenAlex(request, email, signal),
             ]);
             outcomes[platform] = outcome;
             if (outcome.status === "fulfilled" && new Set(outcome.value.map((c) => c.doi)).size === 1) break;

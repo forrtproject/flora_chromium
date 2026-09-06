@@ -563,9 +563,30 @@ describe("service-worker", () => {
 
         expect(mockLookupDOIs).toHaveBeenCalledWith([
             doi("10.1126/science.9999999"),
-        ], expect.any(Object));
+        ], expect.any(Object), expect.any(AbortSignal));
         expect(response.results["10.1038/nature12373"]).toEqual(MOCK_RESULT);
         expect(response.results["10.1126/science.9999999"]).toEqual(otherResult);
+    });
+
+    it("caches a shared lookup when its originating tab cancels", async () => {
+        let complete!: (value: Map<string, typeof MOCK_RESULT>) => void;
+        mockLookupDOIs.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+        const send = (tabId: number, requestId: string) => new Promise<LookupResponse>(resolve => {
+            messageHandler({type: "FLORA_LOOKUP", requestId, dois: [MOCK_RESULT.doi]},
+                {tab: {id: tabId}, documentId: "document"}, resolve as (r: unknown) => void);
+        });
+        const first = send(1, "first");
+        await vi.waitFor(() => expect(mockLookupDOIs).toHaveBeenCalledTimes(1));
+        const second = send(2, "second");
+        // Both callers have crossed the cache read before cancelling the owner.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "first"},
+            {tab: {id: 1}, documentId: "document"}, () => {});
+        complete(new Map([[MOCK_RESULT.doi, MOCK_RESULT]]));
+        await first;
+        expect((await second).results[MOCK_RESULT.doi]).toEqual(MOCK_RESULT);
+        expect(cacheStore.get(`flora:${MOCK_RESULT.doi}`)).toEqual(MOCK_RESULT);
+        expect(mockLookupDOIs).toHaveBeenCalledTimes(1);
     });
 
     describe("PMC id resolution", () => {
@@ -589,7 +610,7 @@ describe("service-worker", () => {
 
             const response = await sendPmcResolve(["PMC12638941", "PMC99999999"]);
 
-            expect(mockResolvePmcIds).toHaveBeenCalledWith(["PMC12638941", "PMC99999999"], "pmcid");
+            expect(mockResolvePmcIds).toHaveBeenCalledWith(["PMC12638941", "PMC99999999"], "pmcid", undefined);
             expect(response.results).toEqual({
                 PMC12638941: "10.1038/s41531-025-01179-6",
                 PMC99999999: null,

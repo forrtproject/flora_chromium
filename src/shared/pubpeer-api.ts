@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import { debugLog } from "./debug";
 import { BlobCache } from "./blob-cache";
 import { getHiddenCommenters, isHiddenCommenter } from "./pubpeer-filter";
@@ -45,7 +46,7 @@ async function fetchPubPeer(
   dois: string[],
   urls: string[]
 ): Promise<PubPeerFeedback[]> {
-  const response = await fetch(
+  const response = await fetchWithDeadline(
     "https://pubpeer.com/v3/publications?devkey=PubMedChrome",
     {
       method: "POST",

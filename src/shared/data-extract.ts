@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import {debugError} from "./debug";
 
 export const RET_MAP_KEY = "RetractionLookupLocal"
@@ -28,7 +29,7 @@ export interface RetractionMaps {
 
 export async function fetchRetractionMap(): Promise<RetractionMaps | undefined> {
     try {
-        const response = await fetch(PREBUILT_JSON_URL);
+        const response = await fetchWithDeadline(PREBUILT_JSON_URL);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (data && typeof data === 'object' && data.retractions && data.concerns)

@@ -1,5 +1,11 @@
 /// <reference types="vitest/globals" />
 
+// Native fetch/Request requires Node's AbortSignal rather than jsdom's version.
+import { transferableAbortController } from "node:util";
+const nativeController = transferableAbortController();
+globalThis.AbortController = nativeController.constructor as typeof AbortController;
+globalThis.AbortSignal = nativeController.signal.constructor as typeof AbortSignal;
+
 // Mock chrome APIs for testing
 const storageMock = {
   sync: {
