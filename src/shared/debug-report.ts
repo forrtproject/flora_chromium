@@ -144,7 +144,7 @@ export function renderDebugReport(
     return redactDebugText(lines.join("\n"));
   }
 
-  let body = shown.map(formatDebugEntry).join("\n");
+  let body = redactDebugText(shown.map(formatDebugEntry).join("\n"));
   if (omitted > 0) body = `… ${omitted} earlier entries trimmed …\n${body}`;
   if (body.length > MAX_REPORT_CHARS) {
     body = `… earlier entries trimmed …\n${body.slice(body.length - MAX_REPORT_CHARS)}`;
