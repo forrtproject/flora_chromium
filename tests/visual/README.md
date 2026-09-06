@@ -181,19 +181,33 @@ The privileged job executes only default-branch code and parses artifact JSON
 as data. It also checks the PR head SHA and repository so stale runs cannot
 approve a newer commit.
 
-Only screenshot changes require a visual review. A collaborator with write
-access, other than the PR author, must inspect the report and submit an
-**approving PR review** containing a standalone line:
+The PR description shows only the checkboxes that apply:
 
-```
-Visual approved
-```
+- [ ] I checked the changed screenshots and they look right.
+- [ ] I checked the screenshot test setup changes.
 
-The approval must be on the current head commit, after the capture completed.
-A newer commit or capture, a dismissed approval, or a subsequent request for
-changes invalidates it. A review-event workflow triggers re-evaluation. The
-`Visual approval` status succeeds automatically for unchanged screenshots,
-stays pending for changes awaiting review, and fails if capture failed.
+After inspecting the evidence, a human collaborator with write access can tick
+these boxes directly in the PR description. The PR author can do this too.
+There is no special review phrase or approving-review requirement. Screenshot
+changes and changes to the capture machinery are separate decisions; ticking
+one box preserves that partial approval while the other remains pending.
+
+A trusted `pull_request_target` body-edit workflow verifies the editor's access
+and an actual unchecked-to-checked transition on the current evidence. That
+edit confirms the boxes checked in the submitted checklist, so rapid clicks
+do not lose the first choice. Stale edit events cannot overwrite a later edit;
+checked text without an authorized checkbox edit does not grant approval.
+Approval is recorded against
+the head commit, capture run/attempt and current artifact, with the capture
+timestamp in the managed evidence marker. New commits or captures reset the
+checkboxes. Unchecking a box withdraws that approval. Capture failures remain
+failures regardless of the checklist.
+
+The `Visual approval` status succeeds automatically when there are no screenshot
+or capture-input changes, stays pending until the required boxes are checked,
+and fails if capture failed. Summary counts use separate units: rendered
+examples, committed screenshot files and non-image capture inputs. Rendered
+examples and committed screenshots can overlap and are not added together.
 
 **Activation:** these trusted workflows must first be merged to the default
 branch. Then make `Visual approval` a required status check for `main` using
