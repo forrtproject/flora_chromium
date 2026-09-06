@@ -35,9 +35,30 @@ describe("side panel article title", () => {
         expect(panel.textContent).not.toContain("hasn't been discussed");
         expect(panelTitle()).toBe("Test article");
         const button = [...panel.querySelectorAll("button")].find(node => node.textContent === "Retry")!;
+        button.focus();
         button.click();
         await vi.waitFor(() => expect(document.getElementById("flora-pubpeer-panel")!.textContent).toContain("No PubPeer comments yet"));
         expect(retry).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(document.activeElement).toBe(
+            document.querySelector('#flora-pubpeer-panel [aria-label="Close panel"]')));
+    });
+
+    it("does not steal focus moved elsewhere while PubPeer retry is pending", async () => {
+        const other = document.createElement('button');
+        document.body.appendChild(other);
+        let finish!: () => void;
+        const state = new Map<DoiString, LookupState>();
+        const context = new Map<DoiString, DoiContext>([[ARTICLE, "article"]]);
+        const retry = async () => {
+            await new Promise<void>(resolve => {finish = resolve;});
+            renderSidePanel([], [], state, context, new Map(), [], "Article");
+        };
+        renderSidePanel([], [], state, context, new Map(), [], "Article", retry);
+        const button = [...document.querySelectorAll<HTMLButtonElement>('#flora-pubpeer-panel button')]
+            .find(node => node.textContent === 'Retry')!;
+        button.focus(); button.click(); other.focus(); finish();
+        await vi.waitFor(() => expect(document.getElementById('flora-pubpeer-panel')?.textContent).toContain('No PubPeer comments yet'));
+        expect(document.activeElement).toBe(other);
     });
 
     it("prefers the DOI-resolved title over the page's own metadata", () => {

@@ -18,7 +18,7 @@ const picture = (name: string, kind: string) => {
 };
 // Missing comparison baselines remain capture failures, but the captured image
 // can still be inspected as a new visual rather than beside empty columns.
-const isNew = (r: typeof results[number]) => r.detail?.startsWith("no baseline") &&
+const isNew = (r: typeof results[number]) => !existsSync(path.join(dir, `${r.name}.before.png`)) &&
   existsSync(path.join(dir, `${r.name}.actual.png`));
 const changed = results.filter(r => (r.changed || r.status === "fail") && !isNew(r));
 const added = results.filter(isNew);

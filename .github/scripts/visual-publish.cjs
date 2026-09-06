@@ -118,7 +118,7 @@ module.exports = async ({github, context}) => {
   const baselineEvidence = Object.entries(groups).filter(([, entries]) => entries.length)
     .map(([title, entries]) => `#### ${title}\n\n${entries.join('\n')}`).join('\n\n') +
     (omittedPreviews ? `\n${omittedPreviews} additional screenshot previews omitted to keep this description within GitHub's limit. [Review all screenshot files](https://github.com/${owner}/${repo}/pull/${pull_number}/files).` : '');
-  const block = `${start}\n### Visual review\n\n${evidence}\n${summary}\n\n${checklist}\n${baselineEvidence}\n\n[Capture logs](${run.html_url})\n${end}`;
+  const block = `${start}\n### Visual review\n\n${evidence}\n${summary}\n\n${checklist}\n${baselineEvidence}\n\n${changed.length ? '' : `[Download visual report](${link}) — open index.html after downloading.\n\n`}[Capture logs](${run.html_url})\n${end}`;
   const {data: fresh} = await github.rest.pulls.get({owner, repo, pull_number});
   if (fresh.head.sha !== pr.head.sha || fresh.body !== pr.body) return;
   const body = fresh.body ?? '';

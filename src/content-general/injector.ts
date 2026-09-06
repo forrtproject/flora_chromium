@@ -1702,10 +1702,21 @@ export function renderSidePanel(
       retry.style.cssText = "cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
         "color:#853953;border:1px solid #853953;border-radius:6px;background:white;";
       retry.addEventListener("click", async () => {
+        const hadFocus = document.activeElement === retry;
         retry.disabled = true;
         retry.textContent = "Retrying…";
         try { await onRetryPubPeer(); }
-        finally { retry.disabled = false; retry.textContent = "Retry"; }
+        finally {
+          retry.disabled = false;
+          retry.textContent = "Retry";
+          // Replacement removes the focused button; do not steal focus if the
+          // user moved elsewhere while the lookup was running.
+          const currentPanel = document.getElementById(PUBPEER_PANEL_ID);
+          if (hadFocus && currentPanel && document.activeElement === document.body) {
+            const target = retry.isConnected ? retry : currentPanel.querySelector<HTMLElement>('[aria-label="Close panel"]');
+            target?.focus({preventScroll: true});
+          }
+        }
       });
       emptyState.appendChild(retry);
     } else {

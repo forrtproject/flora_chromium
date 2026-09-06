@@ -1,3 +1,4 @@
+import {mockResult} from "../helpers";
 import {afterEach, beforeEach, expect, it, vi} from "vitest";
 import type {SearchSiteAdapter} from "../../src/content-search/sites/types";
 import type {DoiString} from "../../src/shared/types";
@@ -414,4 +415,27 @@ it("lets the new page queue recovery while an older page Retry is still unwindin
     await vi.waitFor(() => expect(retraction).toHaveBeenCalledTimes(3));
     await vi.waitFor(() => expect(document.getElementById("flora-alert-toast")).toBeNull());
     expect(send).toHaveBeenCalledTimes(2);
+});
+
+
+it.each(['resolve', 'reject'])("restores a previous row's confirmed DOI after a later pass is cancelled (%s)", async outcome => {
+    const result = mockResult();
+    send.mockResolvedValueOnce({results: {[DOI]: result}, errors: {}});
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(adapter, document);
+    const original = document.querySelector('.result')!;
+    let settle!: () => void;
+    send.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        settle = () => outcome === 'resolve' ? resolve({results: {}, errors: {}}) : reject(new Error('cancelled'));
+    }));
+    document.body.insertAdjacentHTML('beforeend', '<div class="result" id="later"></div>');
+    const later = processSearchResults(adapter, document);
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    const {cancelWork} = await import("../../src/shared/work-cancellation");
+    cancelWork(); settle(); await later;
+    expect(badges.mock.lastCall![1].get(DOI)).toEqual({status: 'matched', result, source: 'extracted'});
+    expect(original.hasAttribute('data-flora-processed')).toBe(true);
+    expect(original.querySelector('[data-flora-panel]')).not.toBeNull();
+    expect(document.querySelector('#later')?.hasAttribute('data-flora-processed')).toBe(false);
+    expect(document.querySelector('#later [data-flora-panel]')).toBeNull();
 });

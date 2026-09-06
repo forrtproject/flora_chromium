@@ -171,7 +171,10 @@ test('visual publication policy', async t => {
   await t.test('requires review only for screenshots and capture inputs', async () => {
     const baseline=await scenario({files:[{filename:'tests/visual/baselines/fixture.png',status:'modified'}]});
     assert.equal(baseline.state,'pending'); assert.match(baseline.body,/raw.githubusercontent.com/);
-    assert.equal((await scenario({files:[{filename:'tests/visual/run.ts',status:'modified'}]})).state,'pending');
+    assert.match(baseline.body,/Download visual report.*actions\/runs\/123\/artifacts\/1/);
+    const setupOnly = await scenario({files:[{filename:'tests/visual/run.ts',status:'modified'}]});
+    assert.equal(setupOnly.state,'pending');
+    assert.match(setupOnly.body,/Download visual report.*actions\/runs\/123\/artifacts\/1/);
     for (const filename of ['tsconfig.json', 'tsconfig.visual.json', '.npmrc', 'scripts/docs-screenshots.ts']) {
       assert.equal((await scenario({files:[{filename,status:'modified'}]})).state,'pending');
     }

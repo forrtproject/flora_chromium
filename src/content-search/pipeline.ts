@@ -393,6 +393,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     }
     setWorkItems(uniqueDois.map((doi) => workItem(doi, titleByDoi.get(doi) ?? doi, doi)));
     const request: LookupRequest = {type: "FLORA_LOOKUP", dois: uniqueDois};
+    const previousLookupState = new Map(uniqueDois.map(doi => [doi, lookupState.get(doi)]));
     for (const doi of uniqueDois) lookupState.set(doi, {status: "loading"});
     refreshBadges();
 
@@ -442,8 +443,14 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         if (!isWorkCancelled()) debugLog(`${label}: Lookup failed:`, err);
     } finally {
         if (!navigated() && isWorkCancelled()) {
-            for (const doi of uniqueDois) lookupState.delete(doi);
+            // A repeated DOI can already belong to a completed earlier row.
+            // Cancelling this pass must restore that row's prior result.
+            for (const [doi, previous] of previousLookupState) {
+                if (previous) lookupState.set(doi, previous);
+                else lookupState.delete(doi);
+            }
             for (const {row} of resolved) clearResultRow(row);
+            if (!searchHidden) refreshBadges();
         } else if (!navigated() && !searchHidden) refreshBadges();
     }
 }
