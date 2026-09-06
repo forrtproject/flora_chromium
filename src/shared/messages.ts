@@ -277,6 +277,7 @@ export async function resolvePmcIdsViaWorker(
 /**
  * Ask the service worker to run augmentDOIs, routing all Crossref/OpenAlex
  * fetches through the extension background context (no CORS restrictions).
+ * Unanswered titles are omitted; an invalidated extension context throws so callers can offer reload.
  */
 export async function augmentDOIsViaWorker(
     inputs: Array<string | DoiAugmentRequest>
@@ -288,7 +289,8 @@ export async function augmentDOIsViaWorker(
         type: "FLORA_AUGMENT",
         requests,
     });
-    const unanswered = new Set(response?.unanswered ?? []);
+    if (!response) throw new Error("Extension context invalidated");
+    const unanswered = new Set(response.unanswered ?? []);
     const result = new Map<string, DoiString | null>();
     for (const [title, doi] of Object.entries(response?.results ?? {})) {
         if (unanswered.has(title)) {
