@@ -97,8 +97,13 @@ module.exports = async ({github, context}) => {
   let previewChars = 0, omittedPreviews = 0;
   const groups = {'Changed visuals': [], 'New visuals': [], 'Removed visuals': []};
   if (changed.length) groups['Changed visuals'].push(
-    `[See ${changed.length} changed example ${changed.length === 1 ? 'page' : 'pages'} side by side](${link}) — open index.html after downloading.`);
+    `[Open the before/after report for changed example pages](${link}) — open index.html after downloading.`);
   baselineFiles.forEach(f => {
+    // Regenerated baselines can differ in Git while this run's base/head UI is
+    // identical. Do not present those fixtures as visual changes.
+    const fixture = /^tests\/visual\/baselines\/([a-z0-9-]+)\.png$/.exec(f.filename)?.[1];
+    if (captured && f.status === 'modified' && !f.previous_filename && fixture &&
+        results.some(r => r.name === fixture && r.changed === false)) return;
     const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
     const oldName = f.previous_filename ?? f.filename;
     const beforeExists = f.status !== 'added' && screenshotPath.test(oldName);

@@ -208,14 +208,23 @@ test('visual publication policy', async t => {
   await t.test('shows only changed or new visual evidence without unchanged examples', async () => {
     const result = await scenario({results:[
       {name:'changed-page',status:'fail',detail:'pixel change',changed:true},
-      {name:'unchanged-page',status:'pass',detail:'0 px differ'},
-    ],files:[{filename:'docs/img/new.png',status:'added'},{filename:'docs/img/changed.png',status:'modified'}]});
+      {name:'unchanged-page',status:'pass',detail:'0 px differ',changed:false},
+    ],files:[
+      {filename:'docs/img/new.png',status:'added'},
+      {filename:'docs/img/changed.png',status:'modified'},
+      {filename:'tests/visual/baselines/unchanged-page.png',status:'modified'},
+      {filename:'tests/visual/baselines/changed-page.png',status:'modified'},
+      {filename:'tests/visual/baselines/uncaptured-page.png',status:'modified'},
+    ]});
     assert.match(result.body,/#### Changed visuals/);
     assert.match(result.body,/#### New visuals/);
-    assert.match(result.body,/See 1 changed example page side by side/);
+    assert.match(result.body,/Open the before\/after report for changed example pages/);
     assert.doesNotMatch(result.body,/unchanged|See others/i);
-    assert.equal((result.body.match(/!\[After\]/g) ?? []).length,2);
-    assert.equal((result.body.match(/!\[Before\]/g) ?? []).length,1);
+    assert.match(result.body, /<summary>tests\/visual\/baselines\/changed-page.png<\/summary>/);
+    assert.match(result.body, /<summary>tests\/visual\/baselines\/uncaptured-page.png<\/summary>/);
+    assert.equal(result.state, 'pending');
+    assert.equal((result.body.match(/!\[After\]/g) ?? []).length,4);
+    assert.equal((result.body.match(/!\[Before\]/g) ?? []).length,3);
   });
 
   await t.test('bounds inline previews without dropping approval requirements', async () => {
