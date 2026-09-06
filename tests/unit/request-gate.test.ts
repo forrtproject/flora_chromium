@@ -63,6 +63,7 @@ describe("RequestGate", () => {
         await Promise.all(requests);
         expect(starts).toHaveLength(4);
         for (let i = 1; i < starts.length; i++) {
+            expect(starts[i]).toBeGreaterThanOrEqual(starts[0] + 2_000);
             expect(starts[i] - starts[i - 1]).toBeGreaterThanOrEqual(100);
         }
     });
