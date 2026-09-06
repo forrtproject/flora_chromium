@@ -1,5 +1,6 @@
 import {debugWarn} from "./debug";
 import {getSettings} from "./settings";
+import {RET_MAP_KEY, RET_BUDGET_EVICTED_SYNC_KEY} from "./data-extract";
 
 // Only disposable provider data belongs to this budget. Preferences, the
 // debug log and pending reports must never be evicted to make room for it.
@@ -49,6 +50,12 @@ export async function enforceCacheBudget(bytes: number): Promise<void> {
       const key = ordered[cursor++];
       remove.push(key);
       estimatedFreed += encoder.encode(key + JSON.stringify(all[key])).length;
+    }
+    if (remove.includes(RET_MAP_KEY) && typeof all.synctime === "number" &&
+        Number.isFinite(all.synctime) && all.synctime > 0) {
+      // Record intent before removal: missing data alone must still trigger
+      // recovery, but a budget-evicted map should not be downloaded per check.
+      await chrome.storage.local.set({[RET_BUDGET_EVICTED_SYNC_KEY]: all.synctime});
     }
     await chrome.storage.local.remove(remove);
     // Check the actual storage accounting, rather than relying on estimates.

@@ -5,8 +5,9 @@ export const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * Persistent cache using chrome.storage.local.
  * Supports per-entry TTL or permanent storage (ttlMs = null).
- * Enforces a soft storage quota: when usage approaches the limit it evicts
- * expired entries first, then live entries oldest-first (LRU by createdAt).
+ * Optional per-instance quota evicts expired entries, then oldest writes.
+ * The service worker disables it with zero: cache-budget.ts owns the shared
+ * budget across all providers. This class still removes expired entries on read.
  */
 const QUOTA_CHECK_INTERVAL_MS = 60_000;
 
@@ -22,7 +23,7 @@ export class LocalCache<T> {
     this.quotaBytes = quotaBytes;
   }
 
-  /** Update the quota at runtime (e.g. after the user changes the setting). */
+  /** Set a standalone instance quota; extension preferences use cache-budget.ts. */
   setQuota(bytes: number): void {
     this.quotaBytes = bytes;
   }
@@ -116,7 +117,7 @@ export class LocalCache<T> {
       await chrome.storage.local.remove(expired);
     }
 
-    // Still over quota? Evict live entries oldest-first (LRU by createdAt) until
+    // Still over quota? Evict live entries by oldest write (createdAt) until
     // under the limit. Entries written before createdAt existed sort first (0),
     // so pre-existing entries without the field are evicted first.
     const remainingBytes = await chrome.storage.local.getBytesInUse(null);

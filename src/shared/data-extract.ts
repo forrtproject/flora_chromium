@@ -1,6 +1,8 @@
 import {debugError} from "./debug";
 
-export const RET_MAP_KEY = "RetractionLookupLocal"
+export const RET_MAP_KEY = "RetractionLookupLocal";
+// Successful sync generation deliberately evicted by the shared cache budget.
+export const RET_BUDGET_EVICTED_SYNC_KEY = "flora_retraction_budget_evicted_sync";
 
 /**
  * Prebuilt retraction data, refreshed daily by the GitHub Action

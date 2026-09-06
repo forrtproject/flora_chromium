@@ -1,7 +1,7 @@
 import {LocalCache, MONTH_MS} from "@shared/cache";
 import {installCacheBudget} from "@shared/cache-budget";
 import {createDoiSet, lookupDOIs} from "@shared/flora-api";
-import {RET_MAP_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
+import {RET_MAP_KEY, RET_BUDGET_EVICTED_SYNC_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
 import type {DoiString, ReplicationResult, RetractionResponse} from "@shared/types";
 import {LookupResponse, RetractionCheckResponse, SheetFetchResponse, AugmentResponse, AugmentRequest, PmcResolveResponse, OpenAlexResolveResponse, SemanticScholarResolveResponse, CreateSetResponse} from "@shared/messages";
 import {isLookupRequest, isRetractionCheckRequest, isSheetFetchRequest, isAugmentRequest, isPmcResolveRequest, isOpenAlexResolveRequest, isSemanticScholarResolveRequest, isDebugEntriesRequest, isStashReportRequest, isTakeReportRequest, isCreateSetRequest, type TakeReportResponse} from "@shared/messages";
@@ -578,7 +578,7 @@ export function syncRetractionsInfo(): Promise<void> {
 async function runRetractionSync(): Promise<void> {
     const minInterval = 1000 * 60 * 60 * 24 * 7; // weekly
     const currentTime = Date.now();
-    const previous = await chrome.storage.local.get(["synctime"]) ?? 0;
+    const previous = await chrome.storage.local.get(["synctime", RET_BUDGET_EVICTED_SYNC_KEY]);
     const lastSync = previous.synctime || 0;
     const nextUpdate = lastSync + minInterval;
     const storageResult = await chrome.storage.local.get(RET_MAP_KEY);
@@ -587,8 +587,13 @@ async function runRetractionSync(): Promise<void> {
         Object.keys(map.retractions || {}).length === 0 &&
         Object.keys(map.concerns || {}).length === 0
     );
-    if (isEmpty || currentTime > nextUpdate) {
+    const deliberatelyEvicted = map === undefined && Number.isFinite(lastSync) && lastSync > 0 &&
+        previous[RET_BUDGET_EVICTED_SYNC_KEY] === lastSync;
+    if ((isEmpty && !deliberatelyEvicted) || currentTime > nextUpdate) {
         const synced = await storageSync();
-        if (synced) await chrome.storage.local.set({synctime: currentTime});
+        if (synced) {
+            await chrome.storage.local.set({synctime: currentTime});
+            await chrome.storage.local.remove(RET_BUDGET_EVICTED_SYNC_KEY);
+        }
     }
 }
