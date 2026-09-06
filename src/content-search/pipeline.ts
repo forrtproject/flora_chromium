@@ -46,7 +46,7 @@ const lookupState = new Map<DoiString, LookupState>();
 const retractions = new Map<DoiString, RetractionResponse>();
 const unavailableRetractionDois = new Set<DoiString>();
 let retractionRetryToast: HTMLElement | null = null;
-let retractionRetryQueued = false;
+let retractionRetryQueued: {page: string; generation: number} | null = null;
 function dismissRetractionRetry(): void {
     // Other provider alerts reuse this host; do not dismiss their newer message.
     if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
@@ -66,6 +66,7 @@ function syncRetractionPage(): void {
     if (retractionPage === location.href) return;
     retractionPage = location.href;
     searchNavigationGeneration++;
+    retractionRetryQueued = null;
     unavailableRetractionDois.clear();
     lookupState.clear();
     retractions.clear();
@@ -444,16 +445,18 @@ async function checkSearchRetractions(dois: DoiString[]): Promise<RetractionResp
         }
         debugWarn("Retraction checks unavailable —", error);
         retractionRetryToast = showToast("Retraction checks unavailable. Other results are still shown.", {
-            tone: "error", duration: 0,
+            tone: "error", duration: 0, dismissOnAction: false,
             action: {label: "Retry", onClick: async () => {
                 if (searchHidden || navigated()) { dismissRetractionRetry(); return; }
-                if (retractionRetryQueued) return;
+                if (retractionRetryQueued?.page === passUrl && retractionRetryQueued.generation === generation) return;
                 const queuedSignal = activeWorkSignal();
                 const wasCancelled = queuedSignal?.aborted;
-                retractionRetryQueued = true;
+                const queued = {page: passUrl, generation};
+                retractionRetryQueued = queued;
                 try { await waitForWorkToFinish(); }
-                finally { retractionRetryQueued = false; }
-                if (searchHidden || navigated() || (!wasCancelled && queuedSignal?.aborted)) return;
+                finally { if (retractionRetryQueued === queued) retractionRetryQueued = null; }
+                if (searchHidden || navigated()) return;
+                if (!wasCancelled && queuedSignal?.aborted) return;
                 resumeAutomaticWork();
                 beginWorkIndicator({stages: ["notices"]});
                 try {
