@@ -101,7 +101,9 @@ export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | n
     const key = JSON.stringify([doi, email]);
     const existing = pending.get(key);
     if (existing) return existing;
-    const request = requestOpenAccess(doi, email).finally(() => pending.delete(key));
+    const request = requestOpenAccess(doi, email).finally(() => {
+        if (pending.get(key) === request) pending.delete(key);
+    });
     pending.set(key, request);
     return request;
 }
@@ -143,5 +145,6 @@ async function requestOpenAccess(doi: string, email: string): Promise<OpenAccess
 
 /** Test-only: drop in-memory cache state so each case starts fresh. */
 export function _resetOpenAccessCacheForTesting(): void {
+    pending.clear();
     OA_CACHE.resetForTesting();
 }
