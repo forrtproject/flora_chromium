@@ -48,7 +48,7 @@ import {applyPillStyle, applyPlacement, currentSiteAdapter} from "@shared/site-a
 import {fetchOpenAccess} from "@shared/openaccess";
 import {showToast} from "@shared/toast";
 import {resolveReferenceDois, renderResolvedReferences, releaseReferenceEntries, resetReferenceMarkers, type ResolvedReference} from "./references";
-import {canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
 import {SeenDois} from "./seen-dois";
 import {serializeWithRerun} from "./serial-scan";
@@ -199,7 +199,7 @@ function whenIdle(fn: () => void, timeout = 1000): void {
 
 // Coalesce repeated mutation callbacks, including while the tab is in the background.
 const runScanPasses = serializeWithRerun(async () => {
-    await waitUntilVisible();
+    if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
     if (floraHidden || !canStartAutomaticWork()) return;
     beginWorkIndicator({stages: ["scan", "validate", "augment", "notices", "lookup", "report"]});
     try {
@@ -848,7 +848,7 @@ function parseSheetsUrl(url: string): {
 async function fetchSheetDois(): Promise<void> {
     const parsed = parseSheetsUrl(location.href);
     if (!parsed) return;
-    await waitUntilVisible();
+    if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
     const current = parseSheetsUrl(location.href);
     if (floraHidden || !canStartAutomaticWork() || !current ||
         current.spreadsheetId !== parsed.spreadsheetId || current.gid !== parsed.gid) return;
@@ -927,12 +927,12 @@ async function fetchSheetDois(): Promise<void> {
             // Fetch full sheet data via CSV export to get all DOIs regardless of scroll
             fetchSheetDois();
             // Poll for sheet tab switches — Sheets uses replaceState (no popstate).
-            let lastGid = parseSheetsUrl(location.href)?.gid ?? "0";
+            let lastSheet = `${location.pathname}:${parseSheetsUrl(location.href)?.gid ?? "0"}`;
             setInterval(() => {
-                const nowGid = parseSheetsUrl(location.href)?.gid ?? "0";
-                if (nowGid !== lastGid) {
-                    lastGid = nowGid;
-                    debugLog("Sheets: tab change detected (gid:", nowGid, ") — re-fetching…");
+                const nowSheet = `${location.pathname}:${parseSheetsUrl(location.href)?.gid ?? "0"}`;
+                if (nowSheet !== lastSheet) {
+                    lastSheet = nowSheet;
+                    debugLog("Sheets: tab change detected:", nowSheet, "— re-fetching…");
                     sheetFetchGen++;
                     sheetCsvDois = [];
                     processedDois.clear();

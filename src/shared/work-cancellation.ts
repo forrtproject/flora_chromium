@@ -3,7 +3,10 @@ let controller = new AbortController();
 let started = false;
 let cancelledPage: string | null = null;
 /** Automatic passes stay stopped on this page until navigation or an explicit resume. */
-export const canStartAutomaticWork = (): boolean => cancelledPage !== location.href;
+export function canStartAutomaticWork(): boolean {
+  if (cancelledPage !== null && cancelledPage !== location.href) cancelledPage = null;
+  return cancelledPage === null;
+}
 export function resumeAutomaticWork(): void { cancelledPage = null; }
 export const activeWorkSignal = (): AbortSignal | undefined => started ? controller.signal : undefined;
 export const workSignal = (): AbortSignal => controller.signal;

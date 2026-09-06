@@ -45,6 +45,7 @@ it("coalesces background mutation passes and sends no provider requests until vi
 it("keeps queued and later mutation passes stopped after Cancel, until resume or navigation", async () => {
     const {processSearchResults, setSearchHidden} = await import("../../src/content-search/pipeline");
     const {cancelWork} = await import("../../src/shared/work-cancellation");
+    const originalUrl = location.href;
     let settle!: (value: unknown) => void;
     send.mockImplementationOnce(() => new Promise(resolve => {settle = resolve;}));
     addRow("first");
@@ -62,9 +63,40 @@ it("keeps queued and later mutation passes stopped after Cancel, until resume or
     setSearchHidden(false);
     await processSearchResults(adapter, document);
     expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls[1][0].dois).toEqual(["10.1234/first", "10.1234/second"]);
+    expect(document.querySelectorAll("[data-flora-panel]")).toHaveLength(2);
     cancelWork();
     addRow("third");
     history.replaceState(null, "", "/next-search");
     await processSearchResults(adapter, document);
     expect(send).toHaveBeenCalledTimes(3);
+    history.replaceState(null, "", originalUrl);
+    addRow("fourth");
+    await processSearchResults(adapter, document);
+    expect(send).toHaveBeenCalledTimes(4);
+});
+
+
+it("releases a hidden pending pass after cancellation or page teardown", async () => {
+    const {processSearchResults, setSearchHidden} = await import("../../src/content-search/pipeline");
+    const {beginCancellableWork, endCancellableWork, cancelWork} = await import("../../src/shared/work-cancellation");
+    visible = false;
+    addRow("waiting");
+    beginCancellableWork();
+    const cancelled = processSearchResults(adapter, document);
+    await Promise.resolve();
+    cancelWork();
+    await cancelled;
+    endCancellableWork();
+    expect(send).not.toHaveBeenCalled();
+    setSearchHidden(false);
+    const discarded = processSearchResults(adapter, document);
+    await Promise.resolve();
+    await Promise.resolve();
+    window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: false}));
+    await discarded;
+    expect(send).not.toHaveBeenCalled();
+    visible = true;
+    await processSearchResults(adapter, document);
+    expect(send).toHaveBeenCalledTimes(1);
 });
