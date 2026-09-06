@@ -400,11 +400,24 @@ async function main(): Promise<void> {
 
   const results: FixtureResult[] = [];
   try {
-    const swTarget = await browser.waitForTarget((t) => t.type() === "service_worker", {
+    const swTarget = await browser.waitForTarget((t) =>
+      t.type() === "service_worker" && /^chrome-extension:\/\/[^/]+\/dist\/background\.js$/.test(t.url()), {
       timeout: 20000,
     });
     // Block worker-context external fetches FIRST, then seed storage.
     await attachWorkerFetchBlock(swTarget);
+    // Target discovery can precede extension API initialization. An arbitrary
+    // service worker (including Chrome's own workers) cannot seed our storage.
+    const worker = await swTarget.worker();
+    if (!worker) throw new Error(`Extension worker unavailable: ${swTarget.url()}`);
+    const readyBy = Date.now() + 20000;
+    while (!(await worker.evaluate(() =>
+      typeof chrome !== "undefined" && !!chrome.runtime?.id &&
+      typeof chrome.storage?.local?.set === "function"
+    ))) {
+      if (Date.now() >= readyBy) throw new Error(`Extension storage did not initialize: ${swTarget.url()}`);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     await seedStorage(swTarget);
     console.log("Service worker ready — storage seeded, external fetches blocked.");
 
