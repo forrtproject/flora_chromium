@@ -69,6 +69,23 @@ describe("startDomListener", () => {
         expect(scanWholePage).toHaveBeenCalledTimes(1);
     });
 
+    it("clears queued hidden navigation work after its visibility catch-up scan", async () => {
+        const navigation = Object.assign(new EventTarget(), {currentEntry: {key: "first"}});
+        vi.stubGlobal("navigation", navigation);
+        const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+        listen();
+        navigation.currentEntry = {key: "second"};
+        navigation.dispatchEvent(new Event("currententrychange"));
+        hidden.mockReturnValue(false);
+        document.dispatchEvent(new Event("visibilitychange"));
+        expect(scanWholePage).toHaveBeenCalledTimes(1);
+        document.querySelector("main")!.appendChild(document.createElement("aside"));
+        await Promise.resolve();
+        vi.advanceTimersByTime(DEBOUNCE_MS);
+        expect(scanWholePage).toHaveBeenCalledTimes(1);
+        hidden.mockRestore();
+    });
+
     it("skips the full scan for mutations with no DOI content", async () => {
         listen();
         document.querySelector("main")!.appendChild(

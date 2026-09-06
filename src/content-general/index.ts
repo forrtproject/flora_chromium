@@ -618,7 +618,11 @@ function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<Re
                 try {
                     reportWorkStage("notices", `Checking ${count(resolvedRefs.length, "reference")} for retractions…`);
                     notices = await checkPageRetractions([...new Set(resolvedRefs.map((r) => r.doi))]);
-                    if (stale() || floraHidden || isWorkCancelled()) return [];
+                    if (stale()) return [];
+                    if (floraHidden || isWorkCancelled()) {
+                        releaseReferenceEntries(resolvedRefs);
+                        return [];
+                    }
                     for (const n of notices) refNotices.set(n.originDoi, n);
                     refreshRedacts();
                     reportWorkStage("notices", `Marking up ${count(resolvedRefs.length, "reference")}…`);
