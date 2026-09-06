@@ -4,6 +4,7 @@
 import { getSettings } from "./settings";
 import { BlobCache } from "./blob-cache";
 import { debugWarn } from "./debug";
+import { RequestGate } from "./request-gate";
 
 export interface OpenAccessLocation {
     /** Free full-text URL — the PDF when the location offers one. */
@@ -74,6 +75,10 @@ const OA_CACHE = new BlobCache<OpenAccessStatus & {checkedAt?: number}>({
     ttlMs: 30 * 24 * 60 * 60 * 1000, // 30 days — OA status changes rarely
 });
 
+// One gate per extension context; repeated DOI elements share the same lookup.
+const UNPAYWALL_GATE = new RequestGate("Unpaywall", 4);
+const pending = new Map<string, Promise<OpenAccessStatus | null>>();
+
 async function getUserEmail(): Promise<string> {
     const { email } = await getSettings();
     return email;
@@ -91,8 +96,19 @@ export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | n
     const email = await getUserEmail();
     if (!email) return null;
 
+    // Include email so correcting it can retry immediately while an older request
+    // is still running. Provider results themselves are independent of email.
+    const key = JSON.stringify([doi, email]);
+    const existing = pending.get(key);
+    if (existing) return existing;
+    const request = requestOpenAccess(doi, email).finally(() => pending.delete(key));
+    pending.set(key, request);
+    return request;
+}
+
+async function requestOpenAccess(doi: string, email: string): Promise<OpenAccessStatus | null> {
     try {
-        const resp = await fetch(
+        const resp = await UNPAYWALL_GATE.fetch(
             `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
         );
         if (resp.status === 404) {
