@@ -20,11 +20,12 @@ module.exports = async ({github, context}) => {
   const captured = run.conclusion === 'success' && !!results;
   const changed = captured ? results.filter(r => r.changed) : [];
   const files = await github.paginate(github.rest.pulls.listFiles, {owner, repo, pull_number});
-  const baselineFiles = files.filter(f => /^tests\/visual\/baselines\/[a-z0-9-]+\.png$/.test(f.filename));
+  const screenshotPath = /^(tests\/visual\/baselines\/|docs\/img\/).+\.(png|jpe?g|webp)$/i;
+  const baselineFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && screenshotPath.test(name)));
   // A PR controls its capture job and artifacts. Changes to that machinery
   // cannot certify themselves as unchanged and bypass human review.
   const captureFiles = files.filter(f => /^(tests\/(visual|fixtures)\/|\.github\/(workflows\/visual[^/]*\.yml|scripts\/visual-publish\.cjs)$|package(?:-lock)?\.json$|esbuild\.config\.ts$|manifest\.json$)/.test(f.filename));
-  const needsApproval = changed.length > 0 || captureFiles.length > 0;
+  const needsApproval = changed.length > 0 || captureFiles.length > 0 || baselineFiles.length > 0;
   let approved = false;
   if (captured && needsApproval) {
     const reviews = await github.paginate(github.rest.pulls.listReviews, {owner, repo, pull_number});
@@ -50,10 +51,11 @@ module.exports = async ({github, context}) => {
     changed.map(r => `- ${safe(r.name)}: ${safe(r.detail)}`).join('\n') :
     'Capture failed or results are missing. Inspect the logs; this is not visual approval.';
   const baselineEvidence = baselineFiles.map(f => {
-    const beforePath = f.previous_filename ?? f.filename;
+    const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
+    const beforePath = encodePath(f.previous_filename ?? f.filename);
     const before = `https://raw.githubusercontent.com/${pr.base.repo.full_name}/${pr.base.sha}/${beforePath}`;
-    const after = `https://raw.githubusercontent.com/${pr.head.repo.full_name}/${pr.head.sha}/${f.filename}`;
-    return `\n<details><summary>${f.filename}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${f.status === 'added' ? 'New baseline' : `![Before](${before})`} | ${f.status === 'removed' ? 'Removed baseline' : `![After](${after})`} |\n\n</details>`;
+    const after = `https://raw.githubusercontent.com/${pr.head.repo.full_name}/${pr.head.sha}/${encodePath(f.filename)}`;
+    return `\n<details><summary>${safe(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${f.status === 'added' ? 'New baseline' : `![Before](${before})`} | ${f.status === 'removed' ? 'Removed baseline' : `![After](${after})`} |\n\n</details>`;
   }).join('\n');
   const start = '<!-- flora-visual:start -->' , end = '<!-- flora-visual:end -->';
   const block = `${start}\n### Visual review\n\nCommit: \`${pr.head.sha}\`\n\n${summary}\n${baselineEvidence}\n\n[Download before/after/diff report](${link}) · [Capture logs](${run.html_url})\n\nVisual approval: **${conclusion}**. When screenshots change, a collaborator with write access must inspect index.html in the downloaded report, then submit an approving review containing **Visual approved** on this commit. Approval must follow this capture; new commits or captures require a new visual review.\n${end}`;
