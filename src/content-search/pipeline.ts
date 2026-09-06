@@ -110,6 +110,9 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
             // A panel is placed before its lookup completes; it is not evidence of completion.
             for (const row of rows) {
                 row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
+                    if (!target.hasChildNodes()) target.remove();
+                });
                 row.removeAttribute(PROCESSED_ATTR);
             }
         }
