@@ -173,7 +173,7 @@ async function installPageInterception(page: Page, outage = false): Promise<void
   await page.setRequestInterception(true);
   page.on("request", (req) => {
     if (outage && ["pubpeer.com", "api.unpaywall.org"].includes(new URL(req.url()).hostname)) {
-      void req.respond({status: 503, body: "Provider unavailable"});
+      void req.respond({status: 503, body: "Provider unavailable"}).catch(() => {});
       return;
     }
     const verdict = classifyPageRequest(req.url());
@@ -266,7 +266,14 @@ async function captureFixture(
     if (fixture.outage) {
       await page.waitForSelector(".flora-indicator-pill", {timeout: 12000});
       await page.click(".flora-indicator-pill");
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await page.waitForFunction(() => {
+        const popover = [...document.querySelectorAll<HTMLElement>("[data-flora-popover]")]
+          .find(el => getComputedStyle(el).display !== "none");
+        return !!popover && ["data-flora-oa-row", "data-flora-pubpeer-row"].every(attr => {
+          const row = popover.querySelector(`[${attr}]`);
+          return row?.textContent?.includes("Unavailable") && row.querySelector("button")?.textContent === "Retry";
+        });
+      }, {timeout: 12000});
     }
 
     if (process.env.VR_DEBUG) {
