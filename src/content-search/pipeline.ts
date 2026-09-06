@@ -119,6 +119,13 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
         debugLog(`${adapter.label}: paused on this site — skipping the pass`);
         return;
     }
+    // A replacement result container can discard every unanswered row while
+    // leaving the page-level alert behind. Preserve it if any such row remains.
+    if (titleRetryToast && !Array.from(document.querySelectorAll<HTMLElement>(adapter.resultRow))
+        .some(row => unansweredRows.has(row))) {
+        titleRetryToast.remove();
+        titleRetryToast = null;
+    }
     const rows = root.querySelectorAll<HTMLElement>(`${adapter.resultRow}:not([${PROCESSED_ATTR}])`);
     debugLog(`${adapter.label}: ${rows.length} new result row(s) to process`);
     if (rows.length === 0) return;
@@ -256,6 +263,9 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
                 if (isContextInvalidated(err)) {
                     for (const row of rows) {
                         row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                        row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
+                            if (!target.hasChildNodes()) target.remove();
+                        });
                         row.removeAttribute(PROCESSED_ATTR);
                     }
                     if (!searchHidden && !isWorkCancelled()) showToast("ORE was updated — reload this page to run checks.", {

@@ -126,3 +126,43 @@ it("offers Reload instead of Retry when title matching belongs to a replaced ext
     expect(alert).not.toContain("Retry");
     expect(document.querySelector("[data-flora-panel]")).toBeNull();
 });
+
+it("removes generated Scholar targets on title-context loss but preserves native targets", async () => {
+    document.body.innerHTML = '<div class="result" data-doi="yes"></div><div class="result" data-doi="yes"><div class="gs_ggs"></div></div><div class="result">Title only</div>';
+    const nativeTarget = document.querySelector('.gs_ggs')!;
+    const actual = await vi.importActual<typeof import("../../src/shared/messages")>("../../src/shared/messages");
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send,
+        isContextInvalidated: actual.isContextInvalidated,
+        augmentDOIsViaWorker: vi.fn().mockRejectedValue(new Error('Extension context invalidated'))}));
+    const {SCHOLAR} = await import("../../src/content-search/sites/scholar");
+    const scholarAdapter = {...adapter, preparePanelTarget: SCHOLAR.preparePanelTarget, panelPlacement: SCHOLAR.panelPlacement,
+        extractRow: (row: HTMLElement) => ({doi: row.dataset.doi ? DOI : null, confident: !!row.dataset.doi,
+            title: 'Paper', firstAuthor: null, year: null, sourceUrl: null})};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(scholarAdapter, document);
+    expect(document.querySelector('[data-flora-panel-target]')).toBeNull();
+    expect(nativeTarget.isConnected).toBe(true);
+    expect(nativeTarget.childNodes).toHaveLength(0);
+    expect(document.querySelector('[data-flora-panel]')).toBeNull();
+    expect(document.getElementById('flora-alert-toast')?.textContent).toContain('Reload');
+});
+
+it("keeps Retry for remaining unanswered rows but clears it after results are replaced", async () => {
+    document.body.innerHTML = '<main><div class="result">Unavailable</div></main>';
+    const augment = vi.fn().mockResolvedValue(new Map());
+    vi.doMock("../../src/shared/messages", () => ({safeSendMessage: send, augmentDOIsViaWorker: augment}));
+    send.mockResolvedValue({results: {}, errors: {}});
+    const titleAdapter = {...adapter, extractRow: (row: HTMLElement) => ({
+        doi: row.dataset.doi ? DOI : null, confident: !!row.dataset.doi, title: row.textContent!,
+        firstAuthor: null, year: null, sourceUrl: null,
+    })};
+    const {processSearchResults} = await import("../../src/content-search/pipeline");
+    await processSearchResults(titleAdapter, document);
+    document.querySelector('main')!.insertAdjacentHTML('beforeend', '<div class="result" data-doi="yes">Available</div>');
+    await processSearchResults(titleAdapter, document);
+    expect(document.getElementById('flora-alert-toast')?.textContent).toContain('Retry');
+    document.querySelector('main')!.outerHTML = '<main><div class="result" data-doi="yes">Replacement result</div></main>';
+    await processSearchResults(titleAdapter, document);
+    expect(document.getElementById('flora-alert-toast')).toBeNull();
+    expect(document.querySelectorAll('[data-flora-panel]')).toHaveLength(1);
+});
