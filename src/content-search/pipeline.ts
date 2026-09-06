@@ -8,7 +8,7 @@
 //   4. a title/author/year search via Crossref/OpenAlex (rendered as unconfirmed)
 
 import type {DoiAugmentRequest} from "@shared/doi-augment";
-import {augmentDOIsViaWorker, safeSendMessage} from "@shared/messages";
+import {augmentDOIsViaWorker, isContextInvalidated, safeSendMessage} from "@shared/messages";
 import {retractionCheck} from "@shared/doi-retraction";
 import {validateDOIs} from "@shared/doi-validate";
 import type {DoiString, DoiSource, LookupState, RetractionResponse} from "@shared/types";
@@ -16,6 +16,7 @@ import type {LookupRequest, LookupResponse} from "@shared/messages";
 import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator-pill";
 import {applyPlacement} from "@shared/site-adapters";
 import {showToast} from "@shared/toast";
+import {isSetupComplete} from "@shared/settings";
 import {fetchOpenAccess} from "@shared/openaccess";
 import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
@@ -37,6 +38,24 @@ import type {RowExtraction, SearchSiteAdapter} from "./sites/types";
 const PILL_COLOR = "#853953";
 
 export const PROCESSED_ATTR = "data-flora-processed";
+
+// Failed title resolution waits for an explicit retry or corrected settings.
+// Keeping these rows processed prevents new-result mutations from retrying an outage.
+const unansweredRows = new WeakSet<HTMLElement>();
+let titleRetryToast: HTMLElement | null = null;
+
+export async function retryUnansweredSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
+    // Settings can change while the initial lookup is still finishing.
+    await passQueue;
+    titleRetryToast?.remove();
+    titleRetryToast = null;
+    for (const row of root.querySelectorAll<HTMLElement>(adapter.resultRow)) {
+        if (!unansweredRows.has(row)) continue;
+        unansweredRows.delete(row);
+        row.removeAttribute(PROCESSED_ATTR);
+    }
+    if (!searchHidden && canStartAutomaticWork()) await processSearchResults(adapter, root);
+}
 
 // Replication results and retraction notices arrive from two independent async
 // paths. Both accumulate here and re-render together: updating the badges from
@@ -138,6 +157,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     reportWorkStage("scan", `Reading ${count(rows.length, `${label} result`)}…`);
 
     const resolved: ResolvedRow[] = [];
+    let hasUnansweredTitles = false;
     const place = (info: RowInfo, doi: DoiString, source: DoiSource, isAugmented: boolean, provenanceLabel?: string): void => {
         resolved.push({row: info.row, title: info.title, doi, source});
         void placePanel(adapter, info.row, doi, isAugmented, provenanceLabel);
@@ -147,6 +167,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     // queue for site-id resolution, validation and augmentation.
     let pending: RowInfo[] = [];
     for (const row of rows) {
+        unansweredRows.delete(row);
         row.setAttribute(PROCESSED_ATTR, "true");
         let extraction: RowExtraction | null;
         try {
@@ -232,11 +253,21 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             try {
                 augmented = await augmentDOIsViaWorker(requests);
             } catch (err) {
+                if (isContextInvalidated(err)) {
+                    for (const row of rows) {
+                        row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                        row.removeAttribute(PROCESSED_ATTR);
+                    }
+                    if (!searchHidden && !isWorkCancelled()) showToast("ORE was updated — reload this page to run checks.", {
+                        action: {label: "Reload", onClick: () => location.reload()},
+                    });
+                    return;
+                }
                 debugWarn(`${label}: augmentation failed for ${requests.length} row(s) —`, err);
             }
             for (const info of titled) {
                 const doi = augmented.get(info.title) ?? null;
-                updateWorkItem(info.title, doi ? "done" : "failed", doi ?? "no DOI found");
+                updateWorkItem(info.title, doi ? "done" : "failed", doi ?? (augmented.has(info.title) ? "no DOI found" : "not checked"));
             }
             if (isWorkCancelled()) return;
         }
@@ -260,6 +291,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             }
         }
 
+        if (isWorkCancelled()) return;
         for (const info of pending) {
             const augmentedDoi = augmented.get(info.title) ?? null;
             const extractedDoi = info.doi;
@@ -297,10 +329,26 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             } else if (augmentedDoi) {
                 debugLog(`${label} resolve [augmented-only] "${info.title}" → ${augmentedDoi} (no extraction)`);
                 place(info, augmentedDoi, "augmented", true);
+            } else if (info.title && !augmented.has(info.title)) {
+                unansweredRows.add(info.row);
+                hasUnansweredTitles = true;
+                debugLog(`${label} resolve [title-unanswered] "${info.title}" → waiting for retry`);
             } else {
                 debugLog(`${label} resolve [no-doi] "${info.title}" → no DOI from extraction or augmentation`);
             }
         }
+    }
+
+    // Without an email, the existing setup prompt explains how to enable title matching.
+    if (hasUnansweredTitles && await isSetupComplete() && !searchHidden && !isWorkCancelled()) {
+        titleRetryToast = showToast("DOI matching unavailable for some results.", {
+            tone: "error",
+            action: {label: "Retry", onClick: () => {
+                resumeAutomaticWork();
+                void retryUnansweredSearchResults(adapter, document).catch(err =>
+                    debugError(`${label}: DOI matching retry failed —`, err));
+            }},
+        });
     }
 
     const extractedCount = resolved.filter((r) => r.source === "extracted").length;

@@ -4,7 +4,7 @@
 
 import {resolveSearchSite} from "./sites";
 import {observeSearchResults} from "./observer";
-import {isSearchHidden, processSearchResults, setSearchHidden} from "./pipeline";
+import {isSearchHidden, processSearchResults, retryUnansweredSearchResults, setSearchHidden} from "./pipeline";
 import {debugError, debugLog} from "@shared/debug";
 import {installErrorReporting, reportCodeError} from "@shared/error-report";
 import {isSetupComplete} from "@shared/settings";
@@ -68,6 +68,14 @@ function injectSiteStyle(css: string): void {
 
         // Start observing for dynamically loaded results
         observeSearchResults(adapter);
+
+        chrome.storage.onChanged.addListener((changes, area) => {
+            const settings = changes.flora_settings;
+            if (area !== "sync" || !settings?.newValue?.email?.trim()
+                || settings.newValue.email === settings.oldValue?.email) return;
+            void retryUnansweredSearchResults(adapter, document).catch(err =>
+                debugError(`${adapter.label}: DOI matching after settings change failed —`, err));
+        });
     } catch (err) {
         reportCodeError("ORE failed to start on search page", err);
         reportActiveState(false);
