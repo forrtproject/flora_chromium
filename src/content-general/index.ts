@@ -629,6 +629,7 @@ function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<Re
                     renderResolvedReferences(resolvedRefs, new Map(redacts.map((r) => [r.originDoi, r] as const)), pageState);
                     if (!isSheets) updateIndicatorPillBadges(document, pageState, redacts);
                 } catch (err) {
+                    if (stale()) return [];
                     releaseReferenceEntries(resolvedRefs);
                     reportCodeError(`References: marking up ${resolvedRefs.length} resolved reference(s) failed`, err);
                     return [];
