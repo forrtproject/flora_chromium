@@ -52,23 +52,18 @@ export class RequestGate {
         await this.acquire();
         try {
             for (let attempt = 0; ; attempt++) {
-                const now = Date.now();
-                const startAt = Math.max(now, this.nextStartAt, this.blockedUntil);
-                if (startAt - now > MAX_WAIT_MS) {
-                    throw new Error(`${this.name} rate limited (paused for another ${Math.round((startAt - now) / 1000)} s)`);
-                }
-                this.nextStartAt = startAt + this.minIntervalMs;
-                if (startAt > now) await sleep(startAt - now);
-
-                // Another in-flight request may have extended the platform's
-                // cooldown while this request waited for its reserved start.
-                while (this.blockedUntil > Date.now()) {
-                    const remaining = this.blockedUntil - Date.now();
-                    if (remaining > MAX_WAIT_MS) {
-                        throw new Error(`${this.name} rate limited (paused for another ${Math.round(remaining / 1000)} s)`);
+                // Reserve a start slot again if another in-flight request
+                // extended the cooldown while we slept. Re-reserving also
+                // preserves spacing when several sleepers wake together.
+                do {
+                    const now = Date.now();
+                    const startAt = Math.max(now, this.nextStartAt, this.blockedUntil);
+                    if (startAt - now > MAX_WAIT_MS) {
+                        throw new Error(`${this.name} rate limited (paused for another ${Math.round((startAt - now) / 1000)} s)`);
                     }
-                    await sleep(remaining);
-                }
+                    this.nextStartAt = startAt + this.minIntervalMs;
+                    if (startAt > now) await sleep(startAt - now);
+                } while (this.blockedUntil > Date.now());
 
                 const response = await fetch(url, init);
                 if (response.status !== 429) return response;
