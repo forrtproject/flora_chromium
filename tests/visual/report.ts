@@ -1,10 +1,15 @@
 // Package captured images into a portable review page (no hosting required).
-import {readFileSync, writeFileSync, existsSync} from "node:fs";
+import {readFileSync, writeFileSync, existsSync, mkdirSync} from "node:fs";
 import path from "node:path";
 
 const dir = path.resolve(process.argv[2] ?? "tests/visual/output");
-const results = JSON.parse(readFileSync(path.join(dir, "results.json"), "utf8")) as
-  Array<{name: string; status: string; detail?: string; changed?: boolean}>;
+let results: Array<{name: string; status: string; detail?: string; changed?: boolean}>;
+try {
+  results = JSON.parse(readFileSync(path.join(dir, "results.json"), "utf8"));
+} catch {
+  results = [{name: "capture", status: "fail", detail: "Capture did not produce valid results. See the capture job log for the original error."}];
+}
+mkdirSync(dir, {recursive: true});
 const escape = (s: string) => s.replace(/[&<>"']/g, (c) => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]!));
 const picture = (name: string, kind: string) => {
   const file = path.join(dir, `${name}.${kind}.png`);

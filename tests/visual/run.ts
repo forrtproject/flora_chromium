@@ -92,9 +92,9 @@ const FIXTURES: Fixture[] = [
   { name: "publisher-styled-link-row", urlPath: "publisher-styled-link-row.html" },
   // Reused unit-test fixtures (served from tests/fixtures).
   { name: "article-with-dois", urlPath: "article-with-dois.html" },
-  { name: "doi-in-href", urlPath: "doi-in-href.html" },
+  { name: "doi-in-href", urlPath: "doi-in-href-reflist.html" },
   { name: "doi-in-table", urlPath: "doi-in-table.html" },
-  { name: "doi-in-text", urlPath: "doi-in-text.html" },
+  { name: "doi-in-text", urlPath: "doi-in-text-reflist.html" },
   { name: "retracted", urlPath: "retracted.html" },
 ];
 
@@ -310,7 +310,6 @@ async function captureFixture(
 
     if (!existsSync(baselinePath)) {
       mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
       return { name: fixture.name, status: "fail", detail: "no baseline (run test:visual:update)" };
     }
 
@@ -318,7 +317,6 @@ async function captureFixture(
     const baseline = PNG.sync.read(readFileSync(baselinePath));
     if (baseline.width !== actual.width || baseline.height !== actual.height) {
       mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
       return {
         name: fixture.name,
         status: "fail",
@@ -334,7 +332,6 @@ async function captureFixture(
     });
     if (diffPixels > MAX_DIFF_PIXELS) {
       mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
       writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.diff.png`), PNG.sync.write(diff));
       return {
         name: fixture.name,
