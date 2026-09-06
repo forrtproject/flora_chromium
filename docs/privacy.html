@@ -104,7 +104,8 @@
         <li>
           <strong>The URL and hostname of the current page</strong>, used within
           your browser to scope scanning and to apply your per-domain settings.
-          URLs are not sent as part of paper lookups. If you choose to report an
+          Article-page PubPeer lookups also send the page URL to PubPeer.
+          If you choose to report an
           issue, the report may include page information; review it before sharing.
         </li>
         <li>
@@ -128,8 +129,8 @@
       <ul>
         <li>
           <strong>Settings</strong> (<code>chrome.storage.sync</code>): your
-          contact email, citation style, DOI-pill display preference, cache
-          limit, disabled domains and muted PubPeer commenters. Because this
+          contact email, citation style, cache limit, disabled domains, muted
+          PubPeer commenters and the “Offer Copy log after each pass” preference. Because this
           uses Chrome's sync storage, these settings are synchronised across
           browsers you are signed into — that synchronisation is performed by
           Chrome under your Google account, not by FORRT.
@@ -171,8 +172,8 @@
         <tbody>
           <tr>
             <td>FORRT replication API (<code>rep-api.forrt.org</code>)</td>
-            <td>DOIs, in batches</td>
-            <td>Replication and reproduction records</td>
+            <td>DOIs, in batches; DOI lists for long Atlas links</td>
+            <td>Replication and reproduction records; storing DOI sets referenced by a shorter Atlas link</td>
           </tr>
           <tr>
             <td><a href="https://www.crossref.org/">Crossref</a></td>
@@ -182,7 +183,7 @@
           <tr>
             <td><a href="https://openalex.org/">OpenAlex</a></td>
             <td>Titles, OpenAlex work ids, your contact email</td>
-            <td>Resolving titles to DOIs when Crossref finds no match; resolving OpenAlex search results to DOIs</td>
+            <td>Resolving titles to DOIs; resolving OpenAlex search results to DOIs</td>
           </tr>
           <tr>
             <td><a href="https://www.semanticscholar.org/">Semantic Scholar</a></td>
@@ -196,7 +197,7 @@
           </tr>
           <tr>
             <td><a href="https://pubpeer.com/">PubPeer</a></td>
-            <td>DOIs</td>
+            <td>DOIs and, for article-page lookups, the current page URL</td>
             <td>Post-publication comment counts and threads</td>
           </tr>
           <tr>
@@ -230,6 +231,17 @@
         </tbody>
       </table>
       <p>
+        Title matching alternates which of Crossref or OpenAlex is queried first.
+        The other service is contacted when the first fails or returns no single
+        DOI. Both may therefore receive the same title.
+      </p>
+      <p>
+        For a long Atlas link, ORE sends the DOI list to FORRT to create a stored
+        set and uses its identifier in the link. This happens while preparing
+        the link, before you click it. The separate Meta Report share link
+        encodes its report in the URL fragment instead.
+      </p>
+      <p>
         <strong>Retraction status is determined locally.</strong> The Extension
         downloads the retraction list about once a week and checks papers
         against it on your own device, so no DOI is ever sent anywhere in order
@@ -259,9 +271,11 @@
       <h2>7. Retention</h2>
       <ul>
         <li>
-          <strong>Lookups sent to the FORRT API</strong> are used to answer the
-          request and are not logged. No record is kept of which DOIs were
-          looked up, or of who looked them up.
+          <strong>FORRT API requests</strong> retrieve evidence for the submitted
+          DOIs. DOI sets created for long Atlas links are stored by FORRT so
+          those links can retrieve the list later; they are separate from the
+          lookup cache on your device. Clearing extension storage does not
+          delete a server-side DOI set.
         </li>
         <li>
           <strong>Third-party services</strong> (Crossref, OpenAlex, Unpaywall,
@@ -322,7 +336,8 @@
         All requests are made over HTTPS. Data stored locally is subject to your
         browser's own security model. The Extension requests only the browser
         permissions it needs — storage, extended storage for its cache, and
-        access to the tab you are actively viewing — and its full source code is
+        access to the tab you are actively viewing, plus alarms for scheduled
+        maintenance — and its full source code is
         <a href="https://github.com/forrtproject/chromium-extension">public</a>.
       </p>
 

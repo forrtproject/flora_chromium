@@ -233,7 +233,7 @@ never included.
 ### How it works
 
 1. **Content scripts** run on every page. They extract DOIs from the page using meta tags, JSON-LD, link hrefs, visible text, and HTML tables. Word-break characters are stripped and partial DOI suffixes are filtered out.
-2. If no DOIs are found directly, the extension tries to resolve the page/article title to a DOI using the **Crossref API** first, then **OpenAlex** as a fallback (fuzzy title matching with token-set-ratio > 88%).
+2. If no DOIs are found directly, the extension tries to resolve the page/article title to a DOI using **Crossref** or **OpenAlex**, alternating which service is queried first across titles. The other service is queried if the first fails or returns no single DOI (fuzzy title matching with token-set-ratio > 88%).
 3. Found DOIs are sent to the **background service worker** via `chrome.runtime.sendMessage`.
 4. The service worker checks its **session cache**, deduplicates in-flight requests, and calls the **FORRT Replication API** for any uncached DOIs.
 5. Results are sent back to the content script, which renders **banners** and **inline badges** using Shadow DOM.

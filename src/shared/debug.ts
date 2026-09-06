@@ -11,6 +11,8 @@
  * startup so its own entries skip the message round-trip.
  */
 
+import { redactDebugText } from "./debug-redact";
+
 export type DebugLevel = "log" | "warn" | "error";
 
 /** One captured line. Kept small — hundreds of these are persisted at a time. */
@@ -113,7 +115,7 @@ function stringifyArg(arg: unknown): string {
 }
 
 function formatMessage(args: unknown[]): string {
-  const text = args.map(stringifyArg).join(" ");
+  const text = redactDebugText(args.map(stringifyArg).join(" "));
   return text.length > MAX_MESSAGE_CHARS
     ? `${text.slice(0, MAX_MESSAGE_CHARS)}… (truncated)`
     : text;

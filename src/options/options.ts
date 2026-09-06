@@ -41,7 +41,7 @@ form.addEventListener("submit", async (e) => {
         : "Email removed. Reload open tabs. Title matching and open-access lookups need an email; other checks still work.";
     statusMsg.className = "status success";
     statusMsg.hidden = false;
-    saveBtn.textContent = "Save";
+    saveBtn.textContent = email ? "Save" : "Save contact email";
   } catch (err) {
     debugError("Settings: save failed —", err);
     statusMsg.textContent = "Failed to save — please try again.";
