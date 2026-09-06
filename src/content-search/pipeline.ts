@@ -105,10 +105,6 @@ export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNod
         unansweredRows = new WeakSet();
         dismissSearchRetry();
     }
-    if (retractionPage !== location.href) {
-        retractionPage = location.href;
-        unavailableRetractionDois.clear();
-    }
     if (!canStartAutomaticWork()) return Promise.resolve();
     let pending = pendingPasses.get(adapter);
     if (!pending) pendingPasses.set(adapter, pending = new Map());
@@ -460,7 +456,7 @@ function dismissSearchRetry(): void {
 async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
     const pageUrl = location.href;
     const titleMatchingEnabled = await isSetupComplete();
-    if (searchHidden || isWorkCancelled() || searchRequiresReload || location.href !== pageUrl) return;
+    if (searchHidden || isWorkCancelled() || searchRequiresReload || retryingSearchChecks || location.href !== pageUrl) return;
     const titleFailed = titleMatchingEnabled && [...root.querySelectorAll<HTMLElement>(adapter.resultRow)]
         .some(row => unansweredRows.has(row));
     const noticesFailed = retractionPage === pageUrl && unavailableRetractionDois.size > 0;
