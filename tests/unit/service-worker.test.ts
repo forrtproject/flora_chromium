@@ -13,7 +13,7 @@ import {MONTH_MS} from "../../src/shared/cache";
 
 const MOCK_RESULT = mockResult();
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.unstubAllGlobals());
 
 // Mock flora-api before importing service worker
 const mockLookupDOIs = vi.fn();
@@ -463,7 +463,8 @@ describe("service-worker", () => {
 
         it("does not start fallback loading after its last caller cancels during storage access", async () => {
             blockRetractionMapReads();
-            const fetchMock = vi.spyOn(globalThis, "fetch");
+            const fetchMock = vi.fn(globalThis.fetch);
+            vi.stubGlobal("fetch", fetchMock);
             const sender = {tab: {id: 1}, documentId: "cancelled-check"};
             const request = {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId: "read"};
             const response = new Promise<RetractionCheckResponse>(resolve => messageHandler(request, sender, resolve as (r: unknown) => void));
@@ -478,10 +479,11 @@ describe("service-worker", () => {
 
         it("shares fallback transport, aborts only when the last check cancels, and permits retry", async () => {
             let transport!: AbortSignal;
-            const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce((_url, init) => {
+            const fetchMock = vi.fn(globalThis.fetch).mockImplementationOnce((_url, init) => {
                 transport = init!.signal!;
                 return new Promise((_resolve, reject) => transport.addEventListener("abort", () => reject(transport.reason), {once: true}));
             }).mockResolvedValueOnce(new Response(JSON.stringify({retractions: {"10.1234/paper": "10.1234/notice"}, concerns: {}})));
+            vi.stubGlobal("fetch", fetchMock);
             const sender = {tab: {id: 1}, documentId: "shared-check"};
             const check = (requestId: string) => new Promise<RetractionCheckResponse>(resolve => messageHandler(
                 {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId}, sender, resolve as (r: unknown) => void));
