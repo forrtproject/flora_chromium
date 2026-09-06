@@ -8,6 +8,8 @@ describe("active Sheets source", () => {
     it("exports the linked query tab and follows a newer fragment selection", () => {
         expect(parseSheetsUrl("https://docs.google.com/spreadsheets/d/book/edit?gid=42"))
             .toEqual({spreadsheetId: "book", gid: "42"});
+        expect(parseSheetsUrl("https://docs.google.com/spreadsheets/u/0/d/book/edit?gid=42"))
+            .toEqual({spreadsheetId: "book", gid: "42"});
         expect(parseSheetsUrl("https://docs.google.com/spreadsheets/d/book/edit?gid=42#gid=99"))
             .toEqual({spreadsheetId: "book", gid: "99"});
         expect(sheetTabKey(parseSheetsUrl("https://docs.google.com/spreadsheets/d/other/edit#gid=99")))

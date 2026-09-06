@@ -6,7 +6,7 @@ export interface SheetTab { spreadsheetId: string; gid: string }
 export function parseSheetsUrl(value: string): SheetTab | null {
     try {
         const url = new URL(value);
-        const id = url.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]+)(?:\/|$)/)?.[1];
+        const id = url.pathname.match(/^\/spreadsheets\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)(?:\/|$)/)?.[1];
         if (url.hostname !== "docs.google.com" || !id) return null;
         const gid = new URLSearchParams(url.hash.slice(1)).get("gid") ?? url.searchParams.get("gid") ?? "0";
         return /^\d+$/.test(gid) ? {spreadsheetId: id, gid} : null;
