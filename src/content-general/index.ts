@@ -762,8 +762,9 @@ function extractPageAugmentationMetadata(doc: Document): Omit<DoiAugmentRequest,
 
 async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): Promise<void> {
     const signal = activeWorkSignal() ?? null;
-    if (isSheets) return;
+    if (isSheets || floraHidden || isWorkCancelled()) return;
     const passUrl = location.href;
+    let indicatorStarted = false;
     const primaryDoi = extractPrimaryDOI(document);
     if (!primaryDoi) return;
     try {
@@ -789,6 +790,10 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
         const refKey = [...referenceDois].sort().join("|");
         if (articleFeedbacksFetched && refKey === lastReferenceDoiKey && lastRenderedPageStateVersion === pageStateVersion) return;
 
+        if (floraHidden || isWorkCancelled() || location.href !== passUrl) return;
+        // Keep detached article-provider work in this pass's cancellation/progress lifetime.
+        beginWorkIndicator();
+        indicatorStarted = true;
         // Article: URL lookup once/page. References: one batched, cached lookup.
         const articlePromise = articleFeedbacksFetched
             ? Promise.resolve({feedbacks: lastArticleFeedbacks, unavailable: articlePubPeerUnavailable})
@@ -846,6 +851,8 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
 
     } catch (err) {
         if (!signal?.aborted) debugWarn("PubPeer panel: lookup or render failed —", err);
+    } finally {
+        if (indicatorStarted) endWorkIndicator();
     }
 }
 

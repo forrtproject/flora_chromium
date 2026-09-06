@@ -38,9 +38,12 @@ it("retains a failed hidden lookup and refreshes its unavailable state when show
     expect(badges.mock.lastCall![1].get(DOI)).toEqual({status: "error", message: "FORRT unavailable"});
 });
 
-it("settles loading as unavailable when the worker disappears without a response", async () => {
+it("removes orphaned panels and requests page reload when the extension context disappears", async () => {
     send.mockResolvedValue(undefined);
     const {processSearchResults} = await import("../../src/content-search/pipeline");
     await processSearchResults(adapter, document);
-    expect(badges.mock.lastCall![1].get(DOI)).toEqual({status: "error", message: "Extension unavailable"});
+    expect(badges.mock.lastCall![1].has(DOI)).toBe(false);
+    expect(document.querySelector("[data-flora-panel]")).toBeNull();
+    expect(document.getElementById("flora-alert-toast")?.textContent).toContain("ORE was updated");
+    expect(document.getElementById("flora-alert-toast")?.textContent).toContain("Reload");
 });
