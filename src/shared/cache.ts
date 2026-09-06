@@ -111,7 +111,7 @@ export class LocalCache<T> {
     // First reclaim any expired entries for this prefix.
     const expired = mine.filter(k => {
       const e = all[k] as CachedEntry<T> | undefined;
-      return e?.expiresAt != null && now > e.expiresAt;
+      return e?.expiresAt != null && now >= e.expiresAt;
     });
     if (expired.length > 0) {
       await chrome.storage.local.remove(expired);
