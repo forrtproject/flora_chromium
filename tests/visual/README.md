@@ -205,9 +205,11 @@ failures regardless of the checklist.
 
 The `Visual approval` status succeeds automatically when there are no screenshot
 or capture-input changes, stays pending until the required boxes are checked,
-and fails if capture failed. Summary counts use separate units: rendered
-examples, committed screenshot files and non-image capture inputs. Rendered
-examples and committed screenshots can overlap and are not added together.
+and fails if capture failed. The description and report show only **Changed
+visuals** and **New visuals**, with removals listed separately when needed.
+Unchanged examples are omitted. Modified committed images have a base/PR
+comparison; new images appear once. Rendered examples and committed images
+can overlap, so they are not combined into a total count.
 
 **Activation:** these trusted workflows must first be merged to the default
 branch. Then make `Visual approval` a required status check for `main` using

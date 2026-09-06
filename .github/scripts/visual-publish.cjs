@@ -28,7 +28,7 @@ module.exports = async ({github, context}) => {
   const baselineFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && screenshotPath.test(name)));
   // A PR controls its capture job and artifacts. Changes to that machinery
   // cannot certify themselves as unchanged and bypass human review.
-  const capturePath = /^(tests\/visual\/|tests\/fixtures\/(article-with-dois|doi-in-table|retracted)\.html$|\.github\/(workflows\/visual[^/]*\.yml|scripts\/visual-publish\.cjs)$|package(?:-lock)?\.json$|esbuild\.config\.ts$|manifest\.json$|tsconfig[^/]*\.json$|\.npmrc$)/;
+  const capturePath = /^(tests\/visual\/|tests\/fixtures\/(article-with-dois|doi-in-table|retracted)\.html$|\.github\/(workflows\/visual[^/]*\.yml|scripts\/visual-publish\.cjs)$|scripts\/docs-screenshots\.ts$|package(?:-lock)?\.json$|esbuild\.config\.ts$|manifest\.json$|tsconfig[^/]*\.json$|\.npmrc$)/;
   const captureFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && capturePath.test(name) && !screenshotPath.test(name)));
   const screenshotReview = changed.length > 0 || baselineFiles.length > 0;
   const setupReview = captureFiles.length > 0;
@@ -81,9 +81,7 @@ module.exports = async ({github, context}) => {
   const approved = (!screenshotReview || screenshotsChecked) && (!setupReview || setupChecked);
   const conclusion = !captured ? 'failure' : needsApproval && !approved ? 'action_required' : 'success';
   const summary = captured
-    ? `**${changed.length} example pages look different; ${results.length - changed.length} are unchanged.**\n\n[See the changed pages side by side](${link}) — open index.html after downloading. The unchanged pages are under “See others”.` +
-      (baselineFiles.length ? '\n\nUpdated saved screenshots are shown below. These include reference images and documentation pictures; they are not additional changed pages.' : '') +
-      (setupReview ? `\n\nThis PR also changes how screenshots are captured or compared. [Check those code changes](https://github.com/${owner}/${repo}/pull/${pull_number}/files) to make sure the report still covers the intended pages.` : '')
+    ? (setupReview ? `[Check the screenshot test setup changes](https://github.com/${owner}/${repo}/pull/${pull_number}/files) to make sure the report still covers the intended pages.` : '')
     : '**Screenshots could not be captured.** Check the capture logs and rerun before completing the checklist.';
   const checklist = captured && needsApproval
     ? 'Tick the relevant boxes after checking the evidence. Anyone with write access, including the PR author, can do this. New commits or captures reset the checklist.\n\n' +
@@ -97,7 +95,10 @@ module.exports = async ({github, context}) => {
   const previewLimit = Math.max(0, Math.min(20000, 28000 - summary.length,
     62000 - (pr.body ?? '').length - summary.length));
   let previewChars = 0, omittedPreviews = 0;
-  const baselineEvidence = baselineFiles.map(f => {
+  const groups = {'Changed visuals': [], 'New visuals': [], 'Removed visuals': []};
+  if (changed.length) groups['Changed visuals'].push(
+    `[See ${changed.length} changed example ${changed.length === 1 ? 'page' : 'pages'} side by side](${link}) — open index.html after downloading.`);
+  baselineFiles.forEach(f => {
     const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
     const oldName = f.previous_filename ?? f.filename;
     const beforeExists = f.status !== 'added' && screenshotPath.test(oldName);
@@ -105,11 +106,18 @@ module.exports = async ({github, context}) => {
     const beforePath = encodePath(oldName);
     const before = `https://raw.githubusercontent.com/${pr.base.repo.full_name}/${pr.base.sha}/${beforePath}`;
     const after = `https://raw.githubusercontent.com/${pr.head.repo.full_name}/${pr.head.sha}/${encodePath(f.filename)}`;
-    const preview = `\n<details open><summary>${htmlLabel(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${beforeExists ? `![Before](${before})` : 'New screenshot'} | ${afterExists ? `![After](${after})` : 'Removed screenshot'} |\n\n</details>`;
-    if (previewChars + preview.length > previewLimit) { omittedPreviews++; return ''; }
+    const category = !beforeExists ? 'New visuals' : !afterExists ? 'Removed visuals' : 'Changed visuals';
+    const images = beforeExists && afterExists
+      ? `| Committed base | Committed PR |\n| --- | --- |\n| ![Before](${before}) | ![After](${after}) |`
+      : afterExists ? `![After](${after})` : `Removed screenshot:\n\n![Before](${before})`;
+    const preview = `\n<details open><summary>${htmlLabel(f.filename)}</summary>\n\n${images}\n\n</details>`;
+    if (previewChars + preview.length > previewLimit) { omittedPreviews++; return; }
     previewChars += preview.length;
-    return preview;
-  }).join('\n') + (omittedPreviews ? `\n${omittedPreviews} additional screenshot previews omitted to keep this description within GitHub's limit. [Review all screenshot files](https://github.com/${owner}/${repo}/pull/${pull_number}/files).` : '');
+    groups[category].push(preview);
+  });
+  const baselineEvidence = Object.entries(groups).filter(([, entries]) => entries.length)
+    .map(([title, entries]) => `#### ${title}\n\n${entries.join('\n')}`).join('\n\n') +
+    (omittedPreviews ? `\n${omittedPreviews} additional screenshot previews omitted to keep this description within GitHub's limit. [Review all screenshot files](https://github.com/${owner}/${repo}/pull/${pull_number}/files).` : '');
   const block = `${start}\n### Visual review\n\n${evidence}\n${summary}\n\n${checklist}\n${baselineEvidence}\n\n[Capture logs](${run.html_url})\n${end}`;
   const {data: fresh} = await github.rest.pulls.get({owner, repo, pull_number});
   if (fresh.head.sha !== pr.head.sha || fresh.body !== pr.body) return;

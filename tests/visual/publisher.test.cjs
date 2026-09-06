@@ -172,7 +172,7 @@ test('visual publication policy', async t => {
     const baseline=await scenario({files:[{filename:'tests/visual/baselines/fixture.png',status:'modified'}]});
     assert.equal(baseline.state,'pending'); assert.match(baseline.body,/raw.githubusercontent.com/);
     assert.equal((await scenario({files:[{filename:'tests/visual/run.ts',status:'modified'}]})).state,'pending');
-    for (const filename of ['tsconfig.json', 'tsconfig.visual.json', '.npmrc']) {
+    for (const filename of ['tsconfig.json', 'tsconfig.visual.json', '.npmrc', 'scripts/docs-screenshots.ts']) {
       assert.equal((await scenario({files:[{filename,status:'modified'}]})).state,'pending');
     }
     const setupFrom = evidence({screenshotRequired:false,setupRequired:true});
@@ -191,13 +191,28 @@ test('visual publication policy', async t => {
     assert.equal(movedOut.state,'pending'); assert.match(movedOut.body,/!\[Before\].*def\/docs\/img\/popup.png/);
     assert.match(movedOut.body,/Removed screenshot/); assert.doesNotMatch(movedOut.body,/!\[After\]/);
     const movedIn = await scenario({files:[{filename:'docs/img/new.png',previous_filename:'archive/new.png',status:'renamed'}]});
-    assert.equal(movedIn.state,'pending'); assert.match(movedIn.body,/New screenshot/); assert.doesNotMatch(movedIn.body,/!\[Before\]/);
+    assert.equal(movedIn.state,'pending'); assert.match(movedIn.body,/#### New visuals/); assert.doesNotMatch(movedIn.body,/!\[Before\]/);
     assert.match(movedIn.body,/!\[After\].*abc\/docs\/img\/new.png/);
+    assert.doesNotMatch(movedIn.body,/Committed base|\| --- \|/);
     const renamed = await scenario({files:[{filename:'docs/img/new.png',previous_filename:'docs/img/old.png',status:'renamed'}]});
+    assert.match(renamed.body,/#### Changed visuals/);
     assert.match(renamed.body,/!\[Before\].*def\/docs\/img\/old.png/); assert.match(renamed.body,/!\[After\].*abc\/docs\/img\/new.png/);
     const escaped = await scenario({files:[{filename:'docs/img/a<b&c>.png',status:'added'}]});
     assert.match(escaped.body,/<summary>docs\/img\/a&lt;b&amp;c&gt;.png<\/summary>/);
     assert.match(escaped.body,/abc\/docs\/img\/a%3Cb%26c%3E.png/);
+  });
+
+  await t.test('shows only changed or new visual evidence without unchanged examples', async () => {
+    const result = await scenario({results:[
+      {name:'changed-page',status:'fail',detail:'pixel change',changed:true},
+      {name:'unchanged-page',status:'pass',detail:'0 px differ'},
+    ],files:[{filename:'docs/img/new.png',status:'added'},{filename:'docs/img/changed.png',status:'modified'}]});
+    assert.match(result.body,/#### Changed visuals/);
+    assert.match(result.body,/#### New visuals/);
+    assert.match(result.body,/See 1 changed example page side by side/);
+    assert.doesNotMatch(result.body,/unchanged|See others/i);
+    assert.equal((result.body.match(/!\[After\]/g) ?? []).length,2);
+    assert.equal((result.body.match(/!\[Before\]/g) ?? []).length,1);
   });
 
   await t.test('bounds inline previews without dropping approval requirements', async () => {
