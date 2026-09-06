@@ -13,6 +13,7 @@ module.exports = async ({github, context}) => {
     if (raw.length > 100000) throw new Error('Oversized results');
     results = JSON.parse(raw);
     if (!Array.isArray(results) || results.length === 0 || results.length > 100 ||
+        new Set(results.map(r => r?.name)).size !== results.length ||
         results.some(r => !/^[a-z0-9-]+$/.test(r.name) ||
           !['pass', 'fail'].includes(r.status) || typeof r.detail !== 'string' ||
           (r.status === 'fail' && r.changed !== true))) results = undefined;
@@ -51,9 +52,13 @@ module.exports = async ({github, context}) => {
   const summary = captured ? `${changed.length} of ${results.length} fixtures changed. ${baselineFiles.length} committed screenshots changed. ${captureFiles.length} capture/configuration files changed; these also require review.\n\n` +
     changed.map(r => `- ${safe(r.name)}: ${safe(r.detail)}`).join('\n') :
     'Capture failed or results are missing. Inspect the logs; this is not visual approval.';
-  const htmlLabel = s => String(s).replace(/[&<>"'\r\n]/g, char => ({
+  const htmlLabel = s => String(s).slice(0, 200).replace(/[&<>"'\r\n]/g, char => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '\r': '&#13;', '\n': '&#10;',
   })[char]);
+  // Reserve space for the author's text and the review instructions/status.
+  const previewLimit = Math.max(0, Math.min(20000, 28000 - summary.length,
+    62000 - (pr.body ?? '').length - summary.length));
+  let previewChars = 0, omittedPreviews = 0;
   const baselineEvidence = baselineFiles.map(f => {
     const encodePath = path => path.split("/").map(encodeURIComponent).join("/");
     const oldName = f.previous_filename ?? f.filename;
@@ -62,8 +67,11 @@ module.exports = async ({github, context}) => {
     const beforePath = encodePath(oldName);
     const before = `https://raw.githubusercontent.com/${pr.base.repo.full_name}/${pr.base.sha}/${beforePath}`;
     const after = `https://raw.githubusercontent.com/${pr.head.repo.full_name}/${pr.head.sha}/${encodePath(f.filename)}`;
-    return `\n<details><summary>${htmlLabel(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${beforeExists ? `![Before](${before})` : 'New screenshot'} | ${afterExists ? `![After](${after})` : 'Removed screenshot'} |\n\n</details>`;
-  }).join('\n');
+    const preview = `\n<details><summary>${htmlLabel(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${beforeExists ? `![Before](${before})` : 'New screenshot'} | ${afterExists ? `![After](${after})` : 'Removed screenshot'} |\n\n</details>`;
+    if (previewChars + preview.length > previewLimit) { omittedPreviews++; return ''; }
+    previewChars += preview.length;
+    return preview;
+  }).join('\n') + (omittedPreviews ? `\n${omittedPreviews} additional screenshot previews omitted to keep this description within GitHub's limit. [Review all screenshot files](https://github.com/${owner}/${repo}/pull/${pull_number}/files).` : '');
   const start = '<!-- flora-visual:start -->' , end = '<!-- flora-visual:end -->';
   const block = `${start}\n### Visual review\n\nCommit: \`${pr.head.sha}\`\n\n${summary}\n${baselineEvidence}\n\n[Download before/after/diff report](${link}) · [Capture logs](${run.html_url})\n\nVisual approval: **${conclusion}**. When screenshots change, a collaborator with write access must inspect index.html in the downloaded report, then submit an approving review containing **Visual approved** on this commit. Approval must follow this capture; new commits or captures require a new visual review.\n${end}`;
   const {data: fresh} = await github.rest.pulls.get({owner, repo, pull_number});
@@ -71,7 +79,8 @@ module.exports = async ({github, context}) => {
   const body = fresh.body ?? '';
   const from = body.indexOf(start), to = body.indexOf(end, from);
   const next = from >= 0 && to >= from ? body.slice(0, from) + block + body.slice(to + end.length) : body + '\n\n' + block;
-  await github.rest.pulls.update({owner, repo, pull_number, body: next});
+  if (next.length <= 65000) await github.rest.pulls.update({owner, repo, pull_number, body: next});
+  else console.warn('Visual evidence did not fit the existing PR description; see the status report and Files changed.');
   await github.rest.repos.createCommitStatus({owner, repo, sha: pr.head.sha,
     context: 'Visual approval', target_url: link,
     state: conclusion === 'success' ? 'success' : conclusion === 'failure' ? 'failure' : 'pending',
