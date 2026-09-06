@@ -14,5 +14,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Verify visual approval policy
+        run: node --test tests/visual/publisher.test.cjs
       - run: npm run test
       - run: npm run build
