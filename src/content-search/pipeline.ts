@@ -133,6 +133,8 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
         debugLog(`${adapter.label}: paused on this site — skipping the pass`);
         return;
     }
+    // A replaced result container may discard the failed rows without changing the URL.
+    if (searchRetryMessage) await updateSearchRetry(adapter, document);
     const rows = root.querySelectorAll<HTMLElement>(`${adapter.resultRow}:not([${PROCESSED_ATTR}])`);
     debugLog(`${adapter.label}: ${rows.length} new result row(s) to process`);
     if (rows.length === 0) return;
@@ -270,6 +272,9 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
                 if (isContextInvalidated(err)) {
                     for (const row of rows) {
                         row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                        row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
+                            if (!target.hasChildNodes()) target.remove();
+                        });
                         row.removeAttribute(PROCESSED_ATTR);
                     }
                     if (!searchHidden && !isWorkCancelled()) {
