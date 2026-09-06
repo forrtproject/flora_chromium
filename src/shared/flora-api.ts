@@ -37,7 +37,7 @@ export async function lookupDOIs(
   debugLog(`Looking up ${dois.length} DOIs in ${totalBatches} batch(es) of ${BATCH_SIZE}`);
 
   for (let i = 0; i < dois.length; i += BATCH_SIZE) {
-        signal?.throwIfAborted();
+    signal?.throwIfAborted();
     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
     const batch = dois.slice(i, i + BATCH_SIZE);
     debugLog(`Batch ${batchNum}/${totalBatches}: ${batch.length} DOIs`);

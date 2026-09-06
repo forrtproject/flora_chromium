@@ -453,9 +453,50 @@ describe("service-worker", () => {
                 {originDoi: "10.1000/bundled", doi: "10.1000/bundled-notice", kind: "retraction"},
             ]);
             expect(fetchMock).toHaveBeenCalledWith(
-                "chrome-extension://test-extension-id/dist/retractions.json"
+                "chrome-extension://test-extension-id/dist/retractions.json",
+                expect.objectContaining({signal: expect.any(AbortSignal)})
             );
             vi.unstubAllGlobals();
+        });
+
+        it("does not start fallback loading after its last caller cancels during storage access", async () => {
+            blockRetractionMapReads();
+            const fetchMock = vi.spyOn(globalThis, "fetch");
+            const sender = {tab: {id: 1}, documentId: "cancelled-check"};
+            const request = {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId: "read"};
+            const response = new Promise<RetractionCheckResponse>(resolve => messageHandler(request, sender, resolve as (r: unknown) => void));
+            await vi.waitFor(() => expect(pendingMapReads).toHaveLength(1));
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "read"}, sender, () => {});
+            expect((await response).error).toBeTruthy();
+            releaseMapRead(0, {retractions: {}, concerns: {}});
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(mockStorageSync).not.toHaveBeenCalled();
+            fetchMock.mockRestore();
+        });
+
+        it("shares fallback transport, aborts only when the last check cancels, and permits retry", async () => {
+            let transport!: AbortSignal;
+            const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce((_url, init) => {
+                transport = init!.signal!;
+                return new Promise((_resolve, reject) => transport.addEventListener("abort", () => reject(transport.reason), {once: true}));
+            }).mockResolvedValueOnce(new Response(JSON.stringify({retractions: {"10.1234/paper": "10.1234/notice"}, concerns: {}})));
+            const sender = {tab: {id: 1}, documentId: "shared-check"};
+            const check = (requestId: string) => new Promise<RetractionCheckResponse>(resolve => messageHandler(
+                {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId}, sender, resolve as (r: unknown) => void));
+            const first = check("first");
+            const second = check("second");
+            await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "first"}, sender, () => {});
+            expect((await first).error).toBeTruthy();
+            expect(transport.aborted).toBe(false);
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "second"}, sender, () => {});
+            expect((await second).error).toBeTruthy();
+            expect(transport.aborted).toBe(true);
+            const retry = await check("retry");
+            expect(retry.results).toEqual([{originDoi: "10.1234/paper", doi: "10.1234/notice", kind: "retraction"}]);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            fetchMock.mockRestore();
         });
 
         it("reports an error when no data source is available", async () => {

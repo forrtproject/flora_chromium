@@ -155,7 +155,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isRetractionCheckRequest(message)) {
-            handleRetractionCheck(message.dois)
+            run(signal => handleRetractionCheck(message.dois, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -486,49 +486,53 @@ let retractionGeneration = 0;
 
 // The bundled fallback is fetched lazily (not statically imported) so it stays
 // out of the worker bundle until the very first install before any sync.
-let bundledRetractionMapPromise: Promise<RetractionMaps> | null = null;
+let bundledRetractionLoad: SharedRequest<RetractionMaps> | null = null;
 
-async function loadBundledRetractionMap(): Promise<RetractionMaps> {
-    if (!bundledRetractionMapPromise) {
-        bundledRetractionMapPromise = (async () => {
-            const response = await fetch(chrome.runtime.getURL("dist/retractions.json"));
-            if (!response.ok) {
-                throw new Error(`Failed to load bundled retractions: ${response.status}`);
+function loadBundledRetractionMap(signal?: AbortSignal): Promise<RetractionMaps> {
+    signal?.throwIfAborted();
+    if (!bundledRetractionLoad || bundledRetractionLoad.aborted) {
+        const load: SharedRequest<RetractionMaps> = new SharedRequest(async transportSignal => {
+            try {
+                const response = await fetchWithDeadline(chrome.runtime.getURL("dist/retractions.json"), {signal: transportSignal});
+                if (!response.ok) throw new Error(`Failed to load bundled retractions: ${response.status}`);
+                const data = await response.json() as RetractionMaps;
+                transportSignal.throwIfAborted();
+                return normaliseRetractionMaps(data);
+            } catch (error) {
+                if (bundledRetractionLoad === load) bundledRetractionLoad = null;
+                if (!transportSignal.aborted) debugError("Retractions: bundled fallback map failed to load —", error);
+                throw error;
             }
-            const data = await response.json() as RetractionMaps;
-            return normaliseRetractionMaps(data);
-        })();
+        });
+        bundledRetractionLoad = load;
     }
-    try {
-        return await bundledRetractionMapPromise;
-    } catch (error) {
-        debugError("Retractions: bundled fallback map failed to load —", error);
-        bundledRetractionMapPromise = null; // allow a retry on the next call
-        throw error;
-    }
+    return bundledRetractionLoad.subscribe(signal);
 }
 
 // Shared across checks that arrive while the first load is still running. The
 // worker is killed after ~30s idle, so every wake reloads: reading the 3.5MB
 // blob and rebuilding both maps per concurrent check cost seconds on a page
 // that asks about its DOIs one at a time.
-let retractionSourceLoad: Promise<RetractionMaps> | null = null;
+let retractionSourceLoad: SharedRequest<RetractionMaps> | null = null;
 
-function getRetractionSource(): Promise<RetractionMaps> {
+function getRetractionSource(signal?: AbortSignal): Promise<RetractionMaps> {
+    signal?.throwIfAborted();
     if (cachedRetractionSource) return Promise.resolve(cachedRetractionSource);
-    if (!retractionSourceLoad) {
-        const load: Promise<RetractionMaps> = loadRetractionSource().finally(() => {
+    if (!retractionSourceLoad || retractionSourceLoad.aborted) {
+        const load: SharedRequest<RetractionMaps> = new SharedRequest(transportSignal => loadRetractionSource(transportSignal).finally(() => {
             if (retractionSourceLoad === load) retractionSourceLoad = null;
-        });
+        }));
         retractionSourceLoad = load;
     }
-    return retractionSourceLoad;
+    return retractionSourceLoad.subscribe(signal);
 }
 
-async function loadRetractionSource(): Promise<RetractionMaps> {
+async function loadRetractionSource(signal: AbortSignal): Promise<RetractionMaps> {
+    signal.throwIfAborted();
     const generation = retractionGeneration;
     const started = performance.now();
     const storageResult = await chrome.storage.local.get([RET_MAP_KEY]);
+    signal.throwIfAborted();
     const stored = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
     const hasStoredData = !!stored && (
         Object.keys(stored.retractions || {}).length > 0 ||
@@ -547,15 +551,17 @@ async function loadRetractionSource(): Promise<RetractionMaps> {
     // cache this source choice, so a newly synced map is noticed on next check.
     debugLog("Retractions: no stored map — answering from the bundled map and checking refresh schedule");
     syncRetractionsInfo().catch((err) => debugError("Retractions: sync failed —", err));
-    return loadBundledRetractionMap();
+    return loadBundledRetractionMap(signal);
 }
 
-async function handleRetractionCheck(dois: DoiString[]): Promise<RetractionCheckResponse> {
+async function handleRetractionCheck(dois: DoiString[], signal?: AbortSignal): Promise<RetractionCheckResponse> {
     const started = performance.now();
     let source: RetractionMaps;
     try {
-        source = await getRetractionSource();
+        source = await getRetractionSource(signal);
+        signal?.throwIfAborted();
     } catch (err) {
+        signal?.throwIfAborted();
         debugError(`Retractions: no source available, ${dois.length} DOI(s) unchecked —`, err);
         return {type: "FLORA_RET_CHECK_RESULT", results: [], error: "Retraction data unavailable"};
     }
