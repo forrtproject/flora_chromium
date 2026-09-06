@@ -9,7 +9,7 @@ const escape = (s: string) => s.replace(/[&<>"']/g, (c) => ({"&":"&amp;", "<":"&
 const picture = (name: string, kind: string) => {
   const file = path.join(dir, `${name}.${kind}.png`);
   if (!existsSync(file)) return `<p>${escape(kind)} unavailable</p>`;
-  return `<a href="data:image/png;base64,${readFileSync(file).toString("base64")}" target="_blank"><img alt="${escape(name)} ${kind}" src="data:image/png;base64,${readFileSync(file).toString("base64")}"></a>`;
+  return `<img alt="${escape(name)} ${kind}" src="data:image/png;base64,${readFileSync(file).toString("base64")}">`;
 };
 const rows = [...results].sort((a, b) => Number(!!b.changed) - Number(!!a.changed));
 writeFileSync(path.join(dir, "index.html"), `<!doctype html><meta charset="utf-8"><title>Visual PR review</title>

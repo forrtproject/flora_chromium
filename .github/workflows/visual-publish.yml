@@ -27,7 +27,12 @@ jobs:
             const run = context.payload.workflow_run;
             const {owner, repo} = context.repo;
             const prs = await github.paginate(github.rest.pulls.list, {owner, repo, state: 'open'});
-            const pr = prs.find(p => p.head.sha === run.head_sha && p.head.repo?.full_name === run.head_repository.full_name);
+            // Review workflows may report the PR merge SHA instead of its head.
+            // The associated PR number selects the current PR; the publisher
+            // still validates the capture against its current head/repository.
+            const reviewedNumber = run.event === 'pull_request_review' ? run.pull_requests?.[0]?.number : undefined;
+            const pr = prs.find(p => reviewedNumber ? p.number === reviewedNumber :
+              p.head.sha === run.head_sha && p.head.repo?.full_name === run.head_repository.full_name);
             if (!pr) return;
             const runs = await github.rest.actions.listWorkflowRuns({owner, repo, workflow_id: 'visual.yml', event: 'pull_request', head_sha: pr.head.sha, per_page: 100});
             const capture = runs.data.workflow_runs.find(r => r.head_repository.full_name === pr.head.repo.full_name);
