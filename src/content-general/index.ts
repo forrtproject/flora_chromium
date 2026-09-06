@@ -68,7 +68,7 @@ function refreshRedacts(): void {
 // Reference resolution still running after the pass that started it, and the
 // "nothing to flag" verdict it must complete before that toast is shown.
 let refsPending = 0;
-let pendingNothingToFlag: {examined: number; flagged: boolean} | null = null;
+let pendingNothingToFlag: {dois: DoiString[]; flagged: boolean} | null = null;
 // Keep memory of detected DOIs to track dynamic page changes
 const processedDois = new Set<DoiString>();
 const seenDois = new SeenDois();
@@ -76,6 +76,7 @@ const doiContext = new Map<DoiString, DoiContext>();
 let lastUrl = location.href;
 let augmentAttempted = false;
 let articleFeedbacksFetched = false;
+let articlePubPeerUnavailable = false;
 let lastReferenceDoiKey = "";
 let lastArticleFeedbacks: PubPeerFeedback[] = [];
 // Monotonically increments when FORRT lookup results land in pageState.
@@ -117,6 +118,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     } else if (type === "FLORA_SHOW_UI") {
         floraHidden = false;
         resumeAutomaticWork();
+        updateIndicatorPillBadges(document, pageState, redacts);
         showAllFloraUI();
         void scanWholePage().catch((err) => debugError("General: resumed pass failed —", err));
         reportActiveState(true);
@@ -215,8 +217,9 @@ async function scanWholePage(): Promise<void> {
 
 let nothingToFlagReportedFor: string | null = null;
 
-function reportNothingToFlag(examined: number, flagged: boolean): void {
-    if (examined === 0 || flagged || [...pageState.values()].some(state => state.status === "error")) return;
+function reportNothingToFlag(dois: DoiString[], flagged: boolean): void {
+    const examined = new Set(dois).size;
+    if (examined === 0 || flagged || dois.some(doi => pageState.get(doi)?.status === "error")) return;
     if (nothingToFlagReportedFor === location.href) return;
     nothingToFlagReportedFor = location.href;
     showToast(`Checked ${count(examined, "paper")} — no flags in available results`, {tone: "success"});
@@ -236,6 +239,7 @@ async function runScanPass(): Promise<void> {
         doiContext.clear();
         lastArticleFeedbacks = [];
         articleFeedbacksFetched = false;
+        articlePubPeerUnavailable = false;
         lastReferenceDoiKey = "";
         lastRenderedPageStateVersion = -1;
         pageState.clear();
@@ -388,9 +392,19 @@ async function runScanPass(): Promise<void> {
             reportWorkStage("lookup", `Looking up ${count(newDois.length, "DOI")} in FLoRA…`);
             response = await safeSendMessage<LookupResponse>(request);
         } catch (err) {
-            if (isWorkCancelled() || sheetChanged()) return;
+            if (sheetChanged()) return;
+            if (isWorkCancelled()) {
+                for (const doi of newDois) {
+                    processedDois.delete(doi);
+                    pageState.delete(doi);
+                }
+                pageStateVersion++;
+                return;
+            }
             debugError("Replication lookup failed:", err);
             for (const doi of newDois) pageState.set(doi, {status: "error", message: "FORRT unavailable"});
+            pageStateVersion++;
+            if (floraHidden) return;
             if (!isSheets) placeTitleIndicatorPill();
             updateIndicatorPillBadges(document, pageState, redacts);
             renderErrorBanner("Couldn't load replication data for this page");
@@ -463,10 +477,10 @@ async function runScanPass(): Promise<void> {
                 const flagged = matched.length > 0 || redacts.length > 0;
                 if (refsPending > 0) {
                     // Verdict waits for the references still being resolved.
-                    pendingNothingToFlag = {examined: dois.length, flagged};
+                    pendingNothingToFlag = {dois, flagged};
                     reportWorkStage("report", "Resolving references without a DOI…");
                 } else {
-                    reportNothingToFlag(dois.length, flagged);
+                    reportNothingToFlag(dois, flagged);
                 }
             }
         } catch (err) {
@@ -519,9 +533,9 @@ function finishReferences(refsPromise: Promise<ResolvedReference[]>): Promise<Re
                 }
             }
             if (pendingNothingToFlag && refsPending === 1) {
-                const {examined, flagged} = pendingNothingToFlag;
+                const {dois, flagged} = pendingNothingToFlag;
                 pendingNothingToFlag = null;
-                reportNothingToFlag(examined + resolvedRefs.length, flagged || notices.length > 0);
+                reportNothingToFlag([...dois, ...resolvedRefs.map(ref => ref.doi)], flagged || notices.length > 0);
             }
             return resolvedRefs;
         })
@@ -749,6 +763,7 @@ function extractPageAugmentationMetadata(doc: Document): Omit<DoiAugmentRequest,
 async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): Promise<void> {
     const signal = activeWorkSignal();
     if (isSheets) return;
+    const passUrl = location.href;
     const primaryDoi = extractPrimaryDOI(document);
     if (!primaryDoi) return;
     try {
@@ -776,16 +791,23 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
 
         // Article: URL lookup once/page. References: one batched, cached lookup.
         const articlePromise = articleFeedbacksFetched
-            ? Promise.resolve(lastArticleFeedbacks)
-            : lookupPubPeer([primaryDoi], [location.href], signal);
-        const [articleFeedbacks, refFeedbackByDoi, articleTitle] = await Promise.all([
+            ? Promise.resolve({feedbacks: lastArticleFeedbacks, unavailable: articlePubPeerUnavailable})
+            : lookupPubPeer([primaryDoi], [passUrl], signal).then(
+                feedbacks => ({feedbacks, unavailable: false}),
+                err => {
+                    debugWarn("Article PubPeer data unavailable —", err);
+                    return {feedbacks: [] as PubPeerFeedback[], unavailable: true};
+                },
+            );
+        const [article, refFeedbackByDoi, articleTitle] = await Promise.all([
             articlePromise,
             lookupPubPeerForDois(referenceDois, undefined, signal),
             fetchTitleByDoi(primaryDoi, signal),
         ]);
-        if (signal?.aborted) return;
+        if (signal?.aborted || floraHidden || isWorkCancelled() || location.href !== passUrl) return;
         articleFeedbacksFetched = true;
-        lastArticleFeedbacks = articleFeedbacks;
+        articlePubPeerUnavailable = article.unavailable;
+        lastArticleFeedbacks = article.feedbacks;
         lastReferenceDoiKey = refKey;
 
         // Panel lists only refs with PubPeer comments, a notice, or FORRT data.
@@ -810,9 +832,17 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
             return {doi, title};
         }));
 
-        if (signal?.aborted) return;
+        if (signal?.aborted || floraHidden || isWorkCancelled() || location.href !== passUrl) return;
         lastRenderedPageStateVersion = pageStateVersion;
-        renderSidePanel(articleFeedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle);
+        renderSidePanel(article.feedbacks, panelRefs, pageState, doiContext, refFeedbackByDoi, redacts, articleTitle,
+            article.unavailable ? async () => {
+                if (location.href !== passUrl) return;
+                articleFeedbacksFetched = false;
+                beginWorkIndicator({stages: ["scan"]});
+                try { await checkPubPeer(Promise.resolve(resolvedRefs)); }
+                finally { endWorkIndicator(); }
+            } : undefined);
+
     } catch (err) {
         debugWarn("PubPeer panel: lookup or render failed —", err);
     }

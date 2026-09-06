@@ -1,4 +1,4 @@
-import {describe, it, expect, beforeEach} from "vitest";
+import {describe, it, expect, beforeEach, vi} from "vitest";
 import {renderSidePanel} from "../../src/content-general/injector";
 import type {DoiContext, DoiString, LookupState} from "../../src/shared/types";
 import {doi, mockResult} from "../helpers";
@@ -23,6 +23,21 @@ describe("side panel article title", () => {
         document.head.innerHTML = "";
         document.body.innerHTML = "";
         document.title = "";
+    });
+
+    it("keeps other findings visible when PubPeer is unavailable and retries without claiming no discussion", async () => {
+        const state = new Map<DoiString, LookupState>([[ARTICLE, {status: "matched", result: mockResult(), source: "extracted"}]]);
+        const context = new Map<DoiString, DoiContext>([[ARTICLE, "article"]]);
+        const retry = vi.fn(async () => renderSidePanel([], [], state, context, new Map(), [], "Test article"));
+        renderSidePanel([], [], state, context, new Map(), [], "Test article", retry);
+        const panel = document.getElementById("flora-pubpeer-panel")!;
+        expect(panel.textContent).toContain("PubPeer unavailable");
+        expect(panel.textContent).not.toContain("hasn't been discussed");
+        expect(panelTitle()).toBe("Test article");
+        const button = [...panel.querySelectorAll("button")].find(node => node.textContent === "Retry")!;
+        button.click();
+        await vi.waitFor(() => expect(document.getElementById("flora-pubpeer-panel")!.textContent).toContain("No PubPeer comments yet"));
+        expect(retry).toHaveBeenCalledTimes(1);
     });
 
     it("prefers the DOI-resolved title over the page's own metadata", () => {

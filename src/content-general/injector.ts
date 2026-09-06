@@ -948,7 +948,8 @@ export function renderSidePanel(
   doiContext: Map<DoiString, DoiContext>,
   refFeedbackByDoi: Map<DoiString, PubPeerFeedback> = new Map(),
   retractions: RetractionResponse[] = [],
-  articleTitle: string | null = null
+  articleTitle: string | null = null,
+  onRetryPubPeer?: () => Promise<void>
 ): void {
   const existingHost = document.getElementById(PUBPEER_PANEL_ID);
   // Track open state via a stateful marker on the host — comparing inline
@@ -1026,7 +1027,7 @@ export function renderSidePanel(
   // Rebuilding recreates the <iframe>, reloading the embedded PubPeer thread.
   const signature = panelSignature(
     primary, references, articleDois, pageState, refFeedbackByDoi, retractionByDoi, articleTitleText
-  );
+  ) + `;pubpeer:${onRetryPubPeer ? "unavailable" : "available"}`;
   if (existingHost && existingHost.dataset.floraPanelSig === signature) {
     debugLog("renderSidePanel: unchanged — kept existing panel");
     return;
@@ -1744,19 +1745,37 @@ export function renderSidePanel(
       `<span style="font-size:13px;font-weight:500;color:#5f6368;">No PubPeer comments yet</span>` +
       `<span style="font-size:12px;line-height:1.5;">This article hasn't been discussed on PubPeer.</span>`;
 
-    const startDiscussion = document.createElement("a");
-    startDiscussion.href = articleDois.length > 0
-      ? `https://pubpeer.com/search?q=${encodeURIComponent(articleDois[0])}`
-      : "https://pubpeer.com/";
-    startDiscussion.target = "_blank";
-    startDiscussion.rel = "noopener";
-    startDiscussion.textContent = "Start a discussion on PubPeer";
-    startDiscussion.style.cssText =
-      "all:unset;cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
-      "color:#853953;border:1px solid #853953;border-radius:6px;transition:background 0.15s;";
-    startDiscussion.addEventListener("mouseenter", () => { startDiscussion.style.background = "#f9f0f4"; });
-    startDiscussion.addEventListener("mouseleave", () => { startDiscussion.style.background = ""; });
-    emptyState.appendChild(startDiscussion);
+    if (onRetryPubPeer) {
+      const labels = emptyState.querySelectorAll("span");
+      labels[0].textContent = "PubPeer unavailable";
+      labels[1].textContent = "Discussion status could not be checked. Other available findings are shown above.";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.style.cssText = "cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
+        "color:#853953;border:1px solid #853953;border-radius:6px;background:white;";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        retry.textContent = "Retrying…";
+        try { await onRetryPubPeer(); }
+        finally { retry.disabled = false; retry.textContent = "Retry"; }
+      });
+      emptyState.appendChild(retry);
+    } else {
+      const startDiscussion = document.createElement("a");
+      startDiscussion.href = articleDois.length > 0
+        ? `https://pubpeer.com/search?q=${encodeURIComponent(articleDois[0])}`
+        : "https://pubpeer.com/";
+      startDiscussion.target = "_blank";
+      startDiscussion.rel = "noopener";
+      startDiscussion.textContent = "Start a discussion on PubPeer";
+      startDiscussion.style.cssText =
+        "all:unset;cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
+        "color:#853953;border:1px solid #853953;border-radius:6px;transition:background 0.15s;";
+      startDiscussion.addEventListener("mouseenter", () => { startDiscussion.style.background = "#f9f0f4"; });
+      startDiscussion.addEventListener("mouseleave", () => { startDiscussion.style.background = ""; });
+      emptyState.appendChild(startDiscussion);
+    }
 
     scrollBody.appendChild(emptyState);
   }
