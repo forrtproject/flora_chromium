@@ -125,7 +125,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | "timeout">
 }
 
 function flushRetractionQueue(): Promise<Map<DoiString, RetractionResponse>> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
         setTimeout(async () => {
             const dois = [...pendingDois];
             pendingDois.clear();
@@ -139,16 +139,19 @@ function flushRetractionQueue(): Promise<Map<DoiString, RetractionResponse>> {
                 const elapsed = Math.round(performance.now() - started);
                 if (response === "timeout") {
                     debugWarn(`Retraction check: no answer from the worker after ${elapsed} ms for ${dois.length} DOI(s) — continuing without notices`);
-                    resolve(new Map());
-                    return;
+                    throw new Error("Retraction checks unavailable: worker timed out");
                 }
-                const results = response?.type === "FLORA_RET_CHECK_RESULT" ? response.results : [];
+                if (response === undefined) throw new Error("Extension context invalidated");
+                if (response?.type !== "FLORA_RET_CHECK_RESULT" || response.error || !Array.isArray(response.results)) {
+                    throw new Error(response?.error || "Retraction checks unavailable");
+                }
+                const results = response.results;
                 debugLog(`Retraction check: ${dois.length} DOI(s) → ${results.length} notice(s) in ${elapsed} ms`);
                 resolve(new Map(results.map((r) => [r.originDoi, r] as const)));
             } catch (err) {
-                // One failed batch must not reject every caller sharing it.
+                // Callers must distinguish an unavailable source from a confirmed empty result.
                 debugError(`Retraction check failed for ${dois.length} DOI(s) —`, err);
-                resolve(new Map());
+                reject(err);
             }
         }, 0);
     });

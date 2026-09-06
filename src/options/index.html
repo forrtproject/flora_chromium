@@ -53,8 +53,8 @@
               <div class="dh-label">Extension Setup</div>
               <h1 class="dh-title">FORRT ORE &mdash; Open Research Extension</h1>
               <div class="dh-authors">
-                Configure ORE to start surfacing replication evidence,
-                retractions, comments and open access on the papers you read.
+                Choose how ORE shows evidence on the papers you read.
+                Email enables title matching and open-access lookups; other checks work without it.
               </div>
 
               <div class="dh-callout" role="note">
@@ -96,10 +96,10 @@
                     rate limits and more reliable lookups while you browse.
                   </p>
                   <p class="dh-callout-text dh-callout-text--muted">
-                    Your email is used <strong>only</strong> as a
-                    <code>mailto</code> parameter sent to Crossref &amp;
-                    OpenAlex and Unpaywall. It is never stored on a FORRT server, shared, or
-                    used for anything else.
+                    Your email is sent as an API contact parameter to Crossref,
+                    OpenAlex, Unpaywall and the NCBI identifier converter. Chrome
+                    sync stores this setting; FORRT does not receive it.
+                    Clear the field and save to remove it.
                   </p>
                 </div>
               </div>
@@ -115,7 +115,6 @@
                     type="email"
                     class="ab-input"
                     placeholder="you@university.edu"
-                    required
                     autocomplete="email"
                   />
                 </div>
@@ -156,7 +155,8 @@
                 <a href="https://api.crossref.org" target="_blank" rel="noopener"
                   >Crossref</a
                 >
-                and fetched only when you ask for one.
+                with doi.org as a fallback. Citations are fetched when you
+                request one, including the sample preview below.
               </div>
             </div>
 
@@ -177,7 +177,8 @@
               <h2 class="dh-title">Cache Storage Limit</h2>
               <div class="dh-authors">
                 ORE stores lookup results locally so pages load faster on
-                repeat visits. Set how much browser storage it may use. Enter
+                repeat visits. This shared limit covers all data providers; your
+                settings and diagnostic logs are kept separately. Enter
                 <strong>0</strong> for unlimited.
               </div>
             </div>

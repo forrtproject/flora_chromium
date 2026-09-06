@@ -16,7 +16,6 @@ import {
   computeExecutablePath,
   detectBrowserPlatform,
   install,
-  resolveBuildId,
 } from "@puppeteer/browsers";
 import puppeteer, { type Browser, type CDPSession, type Page, type Target } from "puppeteer-core";
 import { PNG } from "pngjs";
@@ -40,12 +39,12 @@ import {
 declare const chrome: any;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, "../..");
+const REPO_ROOT = path.resolve(process.env.VR_REPO_ROOT ?? path.resolve(__dirname, "../.."));
 const VISUAL_DIR = __dirname;
 const NEW_FIXTURES_DIR = path.join(VISUAL_DIR, "fixtures");
-const REUSED_FIXTURES_DIR = path.join(REPO_ROOT, "tests", "fixtures");
-const BASELINE_DIR = path.join(VISUAL_DIR, "baselines");
-const OUTPUT_DIR = path.join(VISUAL_DIR, "output");
+const REUSED_FIXTURES_DIR = path.resolve(__dirname, "../fixtures");
+const BASELINE_DIR = path.resolve(process.env.VR_BASELINE_DIR ?? path.join(VISUAL_DIR, "baselines"));
+const OUTPUT_DIR = path.resolve(process.env.VR_OUTPUT_DIR ?? path.join(VISUAL_DIR, "output"));
 
 // ── Determinism knobs ───────────────────────────────────────────────────────
 const VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1 };
@@ -53,7 +52,8 @@ const VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1 };
 // differ before a fixture counts as a regression. The budget is an absolute
 // count rather than a fraction of the page: 0.1 % of a 1280×1465 full-page shot
 // is ~1,900 pixels, enough for a whole pill to move without failing. Renders
-// are byte-identical run to run, so a real change always clears this bar.
+// can contain tiny raster differences; this budget applies only to local
+// regression failure. PR review records every raw RGBA difference separately.
 const PIXEL_THRESHOLD = 0.1;
 const MAX_DIFF_PIXELS = 100;
 
@@ -79,9 +79,11 @@ interface Fixture {
   name: string;
   /** Path served by the static server, relative to a fixtures root. */
   urlPath: string;
+  outage?: boolean;
 }
 
 const FIXTURES: Fixture[] = [
+  {name: "provider-unavailable", urlPath: "provider-unavailable.html", outage: true},
   // New visual fixtures (served from tests/visual/fixtures).
   { name: "ref-list-flex", urlPath: "ref-list-flex.html" },
   { name: "ref-list-grid", urlPath: "ref-list-grid.html" },
@@ -91,11 +93,11 @@ const FIXTURES: Fixture[] = [
   { name: "long-article-sticky", urlPath: "long-article-sticky.html" },
   { name: "shared-block-anchor", urlPath: "shared-block-anchor.html" },
   { name: "publisher-styled-link-row", urlPath: "publisher-styled-link-row.html" },
+  { name: "doi-in-href", urlPath: "doi-in-href-reflist.html" },
+  { name: "doi-in-text", urlPath: "doi-in-text-reflist.html" },
   // Reused unit-test fixtures (served from tests/fixtures).
   { name: "article-with-dois", urlPath: "article-with-dois.html" },
-  { name: "doi-in-href", urlPath: "doi-in-href.html" },
   { name: "doi-in-table", urlPath: "doi-in-table.html" },
-  { name: "doi-in-text", urlPath: "doi-in-text.html" },
   { name: "retracted", urlPath: "retracted.html" },
 ];
 
@@ -104,13 +106,15 @@ const FLORA_SELECTOR =
   ".flora-indicator-pill, .flora-notice-pill, #flora-pubpeer-panel";
 
 const UPDATE = process.argv.includes("--update");
+const REVIEW = process.argv.includes("--review");
 
 // ── Chrome for Testing bootstrap ────────────────────────────────────────────
 async function ensureChrome(): Promise<string> {
   const platform = detectBrowserPlatform();
   if (!platform) throw new Error("Unsupported platform for Chrome for Testing");
   const cacheDir = path.join(os.homedir(), ".cache", "puppeteer");
-  const buildId = await resolveBuildId(BrowserName.CHROME, platform, "stable");
+  // Update deliberately, alongside a review of the resulting screenshots.
+  const buildId = "152.0.7977.75";
 
   const execPath = computeExecutablePath({ browser: BrowserName.CHROME, buildId, cacheDir });
   if (!existsSync(execPath)) {
@@ -168,9 +172,13 @@ async function reseedBeforeFixture(target: Target): Promise<void> {
 }
 
 // ── Per-page request interception (page context) ────────────────────────────
-async function installPageInterception(page: Page): Promise<void> {
+async function installPageInterception(page: Page, outage = false): Promise<void> {
   await page.setRequestInterception(true);
   page.on("request", (req) => {
+    if (outage && ["pubpeer.com", "api.unpaywall.org"].includes(new URL(req.url()).hostname)) {
+      void req.respond({status: 503, body: "Provider unavailable"}).catch(() => {});
+      return;
+    }
     const verdict = classifyPageRequest(req.url());
     if (verdict === "allow") {
       req.continue().catch(() => {});
@@ -191,19 +199,28 @@ async function waitForSettle(page: Page): Promise<void> {
   const stableMs = 700;
   const pollMs = 200;
   const start = Date.now();
-  let lastCount = -1;
+  let lastSnapshot = "";
   let stableSince = Date.now();
 
   for (;;) {
-    const count = await page.evaluate((sel) => document.querySelectorAll(sel).length, FLORA_SELECTOR);
+    const snapshot = await page.evaluate((sel) => {
+      const elements = [...document.querySelectorAll(sel)];
+      return {
+        count: elements.length,
+        busy: !!document.getElementById("flora-working-toast"),
+        content: JSON.stringify(elements.map((el) => [
+          el.outerHTML, el.shadowRoot?.innerHTML, el.getBoundingClientRect().toJSON(),
+        ])),
+      };
+    }, FLORA_SELECTOR);
     const elapsed = Date.now() - start;
-    if (count !== lastCount) {
-      lastCount = count;
+    if (snapshot.content !== lastSnapshot || snapshot.busy) {
+      lastSnapshot = snapshot.content;
       stableSince = Date.now();
     }
     const stable = Date.now() - stableSince >= stableMs;
-    if (elapsed >= minMs && stable) break;
-    if (elapsed >= maxMs) break;
+    if (snapshot.count > 0 && !snapshot.busy && elapsed >= minMs && stable) break;
+    if (elapsed >= maxMs) throw new Error("Extension UI did not appear and settle within 12 seconds");
     await new Promise((r) => setTimeout(r, pollMs));
   }
   // Final short settle so any last paint/layout lands before capture.
@@ -215,6 +232,7 @@ interface FixtureResult {
   name: string;
   status: "pass" | "fail" | "written";
   detail?: string;
+  changed?: boolean;
 }
 
 async function captureFixture(
@@ -226,7 +244,7 @@ async function captureFixture(
   const page = await browser.newPage();
   try {
     await page.setViewport(VIEWPORT);
-    await installPageInterception(page);
+    await installPageInterception(page, fixture.outage);
 
     // The content script defers all work until the tab is visible — make it the
     // foreground tab (the extension opens a walkthrough tab on install).
@@ -258,6 +276,21 @@ async function captureFixture(
     // every glyph on the page.
     await page.evaluate(() => (document as Document).fonts.ready.then(() => undefined));
     await waitForSettle(page);
+    if (fixture.outage) {
+      await page.waitForSelector(".flora-indicator-pill", {timeout: 12000});
+      await page.click(".flora-indicator-pill");
+      await page.waitForFunction(() => {
+        const popover = [...document.querySelectorAll<HTMLElement>("[data-flora-popover]")]
+          .find(el => getComputedStyle(el).display !== "none");
+        return !!popover && ["data-flora-oa-row", "data-flora-pubpeer-row"].every(attr => {
+          const row = popover.querySelector(`[${attr}]`);
+          const subtitle = row?.querySelector("[data-flora-row-sub]")?.textContent?.trim();
+          // Capture both the base UI and the changed UI once their provider
+          // results settle; requiring Retry here would reject older versions.
+          return !!subtitle && !/^(?:Checking(?:…|\.\.\.)?|…|\.\.\.)$/.test(subtitle);
+        });
+      }, {timeout: 12000});
+    }
 
     if (process.env.VR_DEBUG) {
       const dbg = await page.evaluate(() => ({
@@ -294,40 +327,44 @@ async function captureFixture(
       return { name: fixture.name, status: "written", detail: `${actual.width}x${actual.height}` };
     }
 
+    mkdirSync(OUTPUT_DIR, { recursive: true });
+    writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
+
     if (!existsSync(baselinePath)) {
       mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
       return { name: fixture.name, status: "fail", detail: "no baseline (run test:visual:update)" };
     }
 
+    writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.before.png`), readFileSync(baselinePath));
     const baseline = PNG.sync.read(readFileSync(baselinePath));
     if (baseline.width !== actual.width || baseline.height !== actual.height) {
       mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
       return {
         name: fixture.name,
         status: "fail",
         detail: `size ${actual.width}x${actual.height} != baseline ${baseline.width}x${baseline.height}`,
+        changed: true,
       };
     }
 
+    const changed = !baseline.data.equals(actual.data);
     const { width, height } = baseline;
     const diff = new PNG({ width, height });
     const diffPixels = pixelmatch(baseline.data, actual.data, diff.data, width, height, {
       threshold: PIXEL_THRESHOLD,
     });
+    if (changed) writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.diff.png`), PNG.sync.write(diff));
     if (diffPixels > MAX_DIFF_PIXELS) {
-      mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.actual.png`), PNG.sync.write(actual));
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.diff.png`), PNG.sync.write(diff));
       return {
         name: fixture.name,
         status: "fail",
         detail: `${diffPixels} px differ (budget ${MAX_DIFF_PIXELS})`,
+        changed: true,
       };
     }
 
-    return { name: fixture.name, status: "pass", detail: `${diffPixels} px differ` };
+    return { name: fixture.name, status: "pass", changed,
+      detail: changed ? `Raw pixels changed; ${diffPixels} perceptual px differ (local budget ${MAX_DIFF_PIXELS})` : "0 px differ" };
   } finally {
     await page.close().catch(() => {});
   }
@@ -351,6 +388,7 @@ async function main(): Promise<void> {
     // Chrome's current headless mode loads MV3 extensions, so no window opens.
     headless: true,
     args: [
+      ...(process.env.CI ? ["--no-sandbox"] : []),
       `--disable-extensions-except=${REPO_ROOT}`,
       `--load-extension=${REPO_ROOT}`,
       "--force-color-profile=srgb",
@@ -374,16 +412,34 @@ async function main(): Promise<void> {
 
   const results: FixtureResult[] = [];
   try {
-    const swTarget = await browser.waitForTarget((t) => t.type() === "service_worker", {
+    const swTarget = await browser.waitForTarget((t) =>
+      t.type() === "service_worker" && /^chrome-extension:\/\/[^/]+\/dist\/background\.js$/.test(t.url()), {
       timeout: 20000,
     });
     // Block worker-context external fetches FIRST, then seed storage.
     await attachWorkerFetchBlock(swTarget);
+    // Target discovery can precede extension API initialization. An arbitrary
+    // service worker (including Chrome's own workers) cannot seed our storage.
+    const worker = await swTarget.worker();
+    if (!worker) throw new Error(`Extension worker unavailable: ${swTarget.url()}`);
+    const readyBy = Date.now() + 20000;
+    while (!(await worker.evaluate(() =>
+      typeof chrome !== "undefined" && !!chrome.runtime?.id &&
+      typeof chrome.storage?.local?.set === "function"
+    ))) {
+      if (Date.now() >= readyBy) throw new Error(`Extension storage did not initialize: ${swTarget.url()}`);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
     await seedStorage(swTarget);
     console.log("Service worker ready — storage seeded, external fetches blocked.");
 
     for (const fixture of FIXTURES) {
-      const result = await captureFixture(browser, swTarget, server.origin, fixture);
+      let result: FixtureResult;
+      try {
+        result = await captureFixture(browser, swTarget, server.origin, fixture);
+      } catch (err) {
+        result = { name: fixture.name, status: "fail", detail: String(err) };
+      }
       results.push(result);
       const icon = result.status === "pass" ? "✓" : result.status === "written" ? "◆" : "✗";
       console.log(`  ${icon} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`);
@@ -395,8 +451,14 @@ async function main(): Promise<void> {
 
   const failures = results.filter((r) => r.status === "fail");
   console.log("");
-  if (UPDATE) {
-    console.log(`Baselines written: ${results.length}. Baselines are macOS-rendered — commit them.`);
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  writeFileSync(path.join(OUTPUT_DIR, "results.json"), JSON.stringify(results, null, 2));
+  if (UPDATE && failures.length === 0) {
+    console.log(`Baselines written: ${results.length}. Inspect before committing.`);
+    return;
+  }
+  if (REVIEW && failures.every((r) => r.changed)) {
+    console.log(`Visual review: ${results.filter(r => r.changed).length} changed fixture(s).`);
     return;
   }
   if (failures.length > 0) {

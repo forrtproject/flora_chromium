@@ -1,0 +1,61 @@
+name: Visual evidence
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: npm ci && npm run build
+        working-directory: base
+      - run: npm ci && npm run build
+        working-directory: head
+      # Use one harness, fixture catalogue, browser and runner for both builds.
+      # Never trust committed macOS PNGs as Linux baselines.
+      - name: Capture base
+        working-directory: head
+        env:
+          VR_REPO_ROOT: ${{ github.workspace }}/base
+          VR_BASELINE_DIR: ${{ runner.temp }}/visual-base
+          VR_OUTPUT_DIR: ${{ runner.temp }}/visual-base-log
+        run: npm run test:visual:update
+      - name: Capture PR and compare
+        working-directory: head
+        env:
+          VR_BASELINE_DIR: ${{ runner.temp }}/visual-base
+          VR_OUTPUT_DIR: ${{ github.workspace }}/visual-report
+        run: npm run test:visual -- --review
+      - name: Build review page
+        if: always()
+        working-directory: head
+        run: npx tsx tests/visual/report.ts ../visual-report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visual-report
+          path: visual-report/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,7 +1,8 @@
-import {describe, it, expect, vi, beforeEach} from "vitest";
+import {describe, it, expect, vi, beforeEach, afterEach} from "vitest";
 import type {
     LookupRequest,
     LookupResponse,
+    SheetFetchResponse,
     RetractionCheckResponse,
 } from "../../src/shared/messages";
 import type {RetractionMaps} from "../../src/shared/data-extract";
@@ -11,6 +12,8 @@ import {MONTH_MS} from "../../src/shared/cache";
 
 
 const MOCK_RESULT = mockResult();
+
+afterEach(() => vi.unstubAllGlobals());
 
 // Mock flora-api before importing service worker
 const mockLookupDOIs = vi.fn();
@@ -176,6 +179,19 @@ describe("service-worker", () => {
         for (const fn of storageChangeHandlers) fn({[RET_MAP_KEY]: {newValue: map}}, "local");
     }
 
+    it("rejects HTML export responses while accepting HTML-looking CSV cells", async () => {
+        const fetchMock = vi.spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response("<html><body>Sign in</body></html>", {headers: {"content-type": "text/html; charset=utf-8"}}))
+            .mockResolvedValueOnce(new Response("<html>\n10.1234/paper", {headers: {"content-type": "text/csv"}}));
+        const getSheet = () => new Promise<SheetFetchResponse>(resolve => {
+            messageHandler({type: "FLORA_SHEET_FETCH", spreadsheetId: "book", gid: "42"}, {}, resolve as (r: unknown) => void);
+        });
+        try {
+            expect(await getSheet()).toMatchObject({csv: null, error: "Sheet export returned a sign-in or error page"});
+            expect(await getSheet()).toMatchObject({csv: "<html>\n10.1234/paper", error: null});
+        } finally { fetchMock.mockRestore(); }
+    });
+
     it("returns results for matched DOIs", async () => {
         mockLookupDOIs.mockResolvedValue(
             new Map([[doi("10.1038/nature12373"), MOCK_RESULT]])
@@ -222,9 +238,8 @@ describe("service-worker", () => {
         expect(response.results["10.1038/nature12373"]).toEqual(MOCK_RESULT);
     });
 
-    it("re-queries no-match DOIs (does not negative-cache)", async () => {
-        // FORRT may add a record later, so an unmatched DOI must hit the API
-        // again on the next request rather than being suppressed by the cache.
+    it("reuses confirmed no-matches with a five-minute TTL", async () => {
+        // Repeated scans reuse a successful empty answer, but only briefly.
         mockLookupDOIs.mockResolvedValue(new Map());
 
         await sendMessage({
@@ -237,9 +252,32 @@ describe("service-worker", () => {
             type: "FLORA_LOOKUP",
             dois: [doi("10.9999/not.yet.in.forrt")],
         });
-        // Second request re-hits the API instead of serving a cached no-match.
-        expect(mockLookupDOIs).toHaveBeenCalledTimes(2);
+        expect(mockLookupDOIs).toHaveBeenCalledTimes(1);
+        expect(cacheSetCalls).toContainEqual({key: "10.9999/not.yet.in.forrt", data: null, ttlMs: 5 * 60_000});
         expect(Object.keys(response.results)).toHaveLength(0);
+    });
+
+    it("caches only confirmed misses in a partial failure and retries failed DOIs", async () => {
+        const miss = doi("10.9999/confirmed-miss");
+        const failed = doi("10.9999/failed");
+        mockLookupDOIs.mockImplementationOnce(async (_dois, errors) => {
+            errors[failed] = "Provider unavailable";
+            return new Map();
+        }).mockResolvedValueOnce(new Map([[failed, MOCK_RESULT]]));
+        const first = await sendMessage({type: "FLORA_LOOKUP", dois: [miss, failed]});
+        expect(first.errors).toEqual({[failed]: "Provider unavailable"});
+        expect(cacheSetCalls).toEqual([{key: miss, data: null, ttlMs: 300_000}]);
+        const retry = await sendMessage({type: "FLORA_LOOKUP", dois: [miss, failed]});
+        expect(mockLookupDOIs.mock.calls[1][0]).toEqual([failed]);
+        expect(retry.results[failed]).toEqual(MOCK_RESULT);
+    });
+
+    it("ignores legacy null entries in the matched-result cache", async () => {
+        const key = doi("10.9999/legacy-miss");
+        cacheStore.set(`flora:${key}`, null);
+        mockLookupDOIs.mockResolvedValueOnce(new Map([[key, MOCK_RESULT]]));
+        expect((await sendMessage({type: "FLORA_LOOKUP", dois: [key]})).results[key]).toEqual(MOCK_RESULT);
+        expect(mockLookupDOIs).toHaveBeenCalledOnce();
     });
 
     it("returns errors on API failure", async () => {
@@ -254,6 +292,29 @@ describe("service-worker", () => {
         expect(response.errors["10.1038/nature12373"]).toBe(
             "FLoRA API error: 500"
         );
+    });
+
+    it("shares a caught batch failure with concurrent callers without caching it", async () => {
+        let finish!: () => void;
+        const pending = new Promise<void>(resolve => { finish = resolve; });
+        mockLookupDOIs.mockImplementation(async (_dois, errors) => {
+            await pending;
+            errors["10.1038/nature12373"] = "FLoRA API error: 503";
+            return new Map();
+        });
+        const request: LookupRequest = {type: "FLORA_LOOKUP", dois: [doi("10.1038/nature12373")]};
+        const first = sendMessage(request);
+        await vi.waitFor(() => expect(mockLookupDOIs).toHaveBeenCalledOnce());
+        const second = sendMessage(request);
+        // Let the second cache read reach the shared in-flight request.
+        await Promise.resolve();
+        finish();
+        for (const response of await Promise.all([first, second])) {
+            expect(response.errors["10.1038/nature12373"]).toMatch(/503/);
+            expect(response.results).toEqual({});
+        }
+        expect(mockLookupDOIs).toHaveBeenCalledOnce();
+        expect(cacheSetCalls).toHaveLength(0);
     });
 
     it("applies a finite TTL to lookup cache writes (not forever)", async () => {
@@ -416,9 +477,60 @@ describe("service-worker", () => {
                 {originDoi: "10.1000/bundled", doi: "10.1000/bundled-notice", kind: "retraction"},
             ]);
             expect(fetchMock).toHaveBeenCalledWith(
-                "chrome-extension://test-extension-id/dist/retractions.json"
+                "chrome-extension://test-extension-id/dist/retractions.json",
+                expect.objectContaining({signal: expect.any(AbortSignal)})
             );
             vi.unstubAllGlobals();
+        });
+
+        it("checks bundled data when storage is unavailable", async () => {
+            vi.mocked(chrome.storage.local.get).mockRejectedValue(new Error("Storage unavailable"));
+            vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+                retractions: {"10.1234/paper": "10.1234/notice"}, concerns: {},
+            }))));
+            const response = await sendRetractionCheck(["10.1234/paper"]);
+            expect(response.error).toBeUndefined();
+            expect(response.results).toEqual([{originDoi: "10.1234/paper", doi: "10.1234/notice", kind: "retraction"}]);
+        });
+
+        it("does not start fallback loading after its last caller cancels during storage access", async () => {
+            blockRetractionMapReads();
+            const fetchMock = vi.fn(globalThis.fetch);
+            vi.stubGlobal("fetch", fetchMock);
+            const sender = {tab: {id: 1}, documentId: "cancelled-check"};
+            const request = {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId: "read"};
+            const response = new Promise<RetractionCheckResponse>(resolve => messageHandler(request, sender, resolve as (r: unknown) => void));
+            await vi.waitFor(() => expect(pendingMapReads).toHaveLength(1));
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "read"}, sender, () => {});
+            expect((await response).error).toBeTruthy();
+            releaseMapRead(0, {retractions: {}, concerns: {}});
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(mockStorageSync).not.toHaveBeenCalled();
+        });
+
+        it("shares fallback transport, aborts only when the last check cancels, and permits retry", async () => {
+            let transport!: AbortSignal;
+            const fetchMock = vi.fn(globalThis.fetch).mockImplementationOnce((_url, init) => {
+                transport = init!.signal!;
+                return new Promise((_resolve, reject) => transport.addEventListener("abort", () => reject(transport.reason), {once: true}));
+            }).mockResolvedValueOnce(new Response(JSON.stringify({retractions: {"10.1234/paper": "10.1234/notice"}, concerns: {}})));
+            vi.stubGlobal("fetch", fetchMock);
+            const sender = {tab: {id: 1}, documentId: "shared-check"};
+            const check = (requestId: string) => new Promise<RetractionCheckResponse>(resolve => messageHandler(
+                {type: "FLORA_RET_CHECK", dois: ["10.1234/paper"], requestId}, sender, resolve as (r: unknown) => void));
+            const first = check("first");
+            const second = check("second");
+            await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "first"}, sender, () => {});
+            expect((await first).error).toBeTruthy();
+            expect(transport.aborted).toBe(false);
+            messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "second"}, sender, () => {});
+            expect((await second).error).toBeTruthy();
+            expect(transport.aborted).toBe(true);
+            const retry = await check("retry");
+            expect(retry.results).toEqual([{originDoi: "10.1234/paper", doi: "10.1234/notice", kind: "retraction"}]);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
         });
 
         it("reports an error when no data source is available", async () => {
@@ -512,9 +624,6 @@ describe("service-worker", () => {
             alarmHandler({name: "flora-retraction-sync"});
 
             await vi.waitFor(() => expect(mockStorageSync).toHaveBeenCalled());
-            expect(chrome.storage.local.set).toHaveBeenCalledWith(
-                expect.objectContaining({synctime: expect.any(Number)})
-            );
         });
 
         it("ignores alarms belonging to other features", async () => {
@@ -540,9 +649,30 @@ describe("service-worker", () => {
 
         expect(mockLookupDOIs).toHaveBeenCalledWith([
             doi("10.1126/science.9999999"),
-        ]);
+        ], expect.any(Object), expect.any(AbortSignal));
         expect(response.results["10.1038/nature12373"]).toEqual(MOCK_RESULT);
         expect(response.results["10.1126/science.9999999"]).toEqual(otherResult);
+    });
+
+    it("caches a shared lookup when its originating tab cancels", async () => {
+        let complete!: (value: Map<string, typeof MOCK_RESULT>) => void;
+        mockLookupDOIs.mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+        const send = (tabId: number, requestId: string) => new Promise<LookupResponse>(resolve => {
+            messageHandler({type: "FLORA_LOOKUP", requestId, dois: [MOCK_RESULT.doi]},
+                {tab: {id: tabId}, documentId: "document"}, resolve as (r: unknown) => void);
+        });
+        const first = send(1, "first");
+        await vi.waitFor(() => expect(mockLookupDOIs).toHaveBeenCalledTimes(1));
+        const second = send(2, "second");
+        // Both callers have crossed the cache read before cancelling the owner.
+        await new Promise(resolve => setTimeout(resolve, 0));
+        messageHandler({type: "FLORA_CANCEL_REQUEST", requestId: "first"},
+            {tab: {id: 1}, documentId: "document"}, () => {});
+        complete(new Map([[MOCK_RESULT.doi, MOCK_RESULT]]));
+        await first;
+        expect((await second).results[MOCK_RESULT.doi]).toEqual(MOCK_RESULT);
+        expect(cacheStore.get(`flora:${MOCK_RESULT.doi}`)).toEqual(MOCK_RESULT);
+        expect(mockLookupDOIs).toHaveBeenCalledTimes(1);
     });
 
     describe("PMC id resolution", () => {
@@ -566,7 +696,7 @@ describe("service-worker", () => {
 
             const response = await sendPmcResolve(["PMC12638941", "PMC99999999"]);
 
-            expect(mockResolvePmcIds).toHaveBeenCalledWith(["PMC12638941", "PMC99999999"], "pmcid");
+            expect(mockResolvePmcIds).toHaveBeenCalledWith(["PMC12638941", "PMC99999999"], "pmcid", undefined);
             expect(response.results).toEqual({
                 PMC12638941: "10.1038/s41531-025-01179-6",
                 PMC99999999: null,

@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import type { DoiString, LookupState, ReplicationResult, ReplicationEntry, OriginalEntry, DoiContext } from "../shared/types";
 import type { PubPeerFeedback } from "../shared/pubpeer-api";
 import { debugLog, debugWarn } from "../shared/debug";
@@ -35,15 +36,11 @@ const LOGO_STYLE =
 
 const TEXT_STYLE = "flex:1;";
 
-const LINK_STYLE =
-    "color:#fff;text-decoration:underline;text-underline-offset:2px;white-space:nowrap;";
-
 const CLOSE_STYLE =
     "all:unset;cursor:pointer;font-size:13px;line-height:1;" +
     "padding-right:10px;user-select:none;align-self:center;color:rgba(255,255,255,0.8);";
 
 const BG = {
-    success: "background:#853953;",
     error: "background:#dc2626;",
 } as const;
 
@@ -121,7 +118,7 @@ export async function renderSetupPrompt(): Promise<void> {
     ">
       <div style="background:linear-gradient(135deg,#853953,#612D53);padding:10px 14px;display:flex;align-items:center;gap:8px;">
         <span style="color:#fff;font-weight:700;font-size:13px;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:5px;">FORRT ORE</span>
-        <span style="color:#fff;font-size:12px;font-weight:500;flex:1;">Setup Required</span>
+        <span style="color:#fff;font-size:12px;font-weight:500;flex:1;">Optional email setup</span>
         <span class="flora-setup-close" role="button" tabindex="0" aria-label="Close" style="
           cursor:pointer;color:rgba(255,255,255,0.7);font-size:18px;line-height:1;
           width:24px;height:24px;display:flex;align-items:center;justify-content:center;
@@ -130,7 +127,9 @@ export async function renderSetupPrompt(): Promise<void> {
       </div>
       <div style="padding:12px 14px;">
         <p style="margin:0 0 6px;font-size:13px;color:#3c4043;line-height:1.45;">
-          Add your email for faster API access to Crossref &amp; OpenAlex DOI resolution.
+          Add an email to enable title matching and open-access lookups.
+          DOI-based replication, retraction and PubPeer checks work without it.
+          Settings explains how Crossref, OpenAlex, Unpaywall and NCBI receive the email.
         </p>
         <button class="flora-setup-open" style="
           all:unset;cursor:pointer;display:block;width:100%;text-align:center;
@@ -188,55 +187,6 @@ export function renderErrorBanner(message: string): void {
       <span style="${TEXT_STYLE}">Error: ${escapeHtml(message)}</span>
       <button style="${CLOSE_STYLE}" aria-label="Close">\u00d7</button>
     </div>`;
-    host.querySelector("button")?.addEventListener("click", () => removeBanner());
-    requestAnimationFrame(() => adjustPageForBanner());
-}
-
-export function renderMatchedBanner(
-    matched: { doi: string; result: ReplicationResult }[]
-): void {
-    if (matched.length === 0) {
-        removeBanner();
-        return;
-    }
-
-    const totalRepl = matched.reduce(
-        (sum, m) => sum + m.result.record.stats.n_replications_total, 0
-    );
-    const totalRepro = matched.reduce(
-        (sum, m) => sum + m.result.record.stats.n_reproductions_total, 0
-    );
-
-    if (totalRepl === 0 && totalRepro === 0) {
-        removeBanner();
-        return;
-    }
-
-    const host = ensureBannerHost();
-
-    const replLabel = totalRepl === 1 ? "replication" : "replications";
-    const reproLabel = totalRepro === 1 ? "reproduction" : "reproductions";
-
-    const parts: string[] = [];
-    if (totalRepl > 0) parts.push(`${totalRepl} ${replLabel}`);
-    if (totalRepro > 0) parts.push(`${totalRepro} ${reproLabel}`);
-    const countsText = parts.join(", ");
-
-    const doiCount = matched.length;
-    const summary = doiCount === 1
-        ? countsText
-        : `Replication/reproduction data found for ${doiCount} DOIs (${countsText})`;
-
-    const matchedDois = matched.map((m) => m.doi as DoiString);
-
-    host.innerHTML = `
-    <div style="${BANNER_BASE_STYLE}${BG.success}">
-      <span style="${LOGO_STYLE}">FORRT ORE</span>
-      <span style="${TEXT_STYLE}">${summary}</span>
-      <a data-flora-details-link style="${LINK_STYLE}" target="_blank" rel="noopener">View details</a>
-      <button style="${CLOSE_STYLE}" aria-label="Close">\u00d7</button>
-    </div>`;
-    bindAtlasLink(host.querySelector<HTMLAnchorElement>("[data-flora-details-link]"), matchedDois);
     host.querySelector("button")?.addEventListener("click", () => removeBanner());
     requestAnimationFrame(() => adjustPageForBanner());
 }
@@ -945,7 +895,8 @@ export function renderSidePanel(
   doiContext: Map<DoiString, DoiContext>,
   refFeedbackByDoi: Map<DoiString, PubPeerFeedback> = new Map(),
   retractions: RetractionResponse[] = [],
-  articleTitle: string | null = null
+  articleTitle: string | null = null,
+  onRetryPubPeer?: () => Promise<void>
 ): void {
   const existingHost = document.getElementById(PUBPEER_PANEL_ID);
   // Track open state via a stateful marker on the host — comparing inline
@@ -1023,7 +974,7 @@ export function renderSidePanel(
   // Rebuilding recreates the <iframe>, reloading the embedded PubPeer thread.
   const signature = panelSignature(
     primary, references, articleDois, pageState, refFeedbackByDoi, retractionByDoi, articleTitleText
-  );
+  ) + `;pubpeer:${onRetryPubPeer ? "unavailable" : "available"}`;
   if (existingHost && existingHost.dataset.floraPanelSig === signature) {
     debugLog("renderSidePanel: unchanged — kept existing panel");
     return;
@@ -1419,7 +1370,7 @@ export function renderSidePanel(
     await Promise.allSettled([...oaPlaceholders].map(async ([doi, placeholder]) => {
       try {
         if (host.dataset.floraPanelStale === "1") return;
-        const resp = await fetch(
+        const resp = await fetchWithDeadline(
           `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
         );
         if (!resp.ok) return;
@@ -1741,19 +1692,48 @@ export function renderSidePanel(
       `<span style="font-size:13px;font-weight:500;color:#5f6368;">No PubPeer comments yet</span>` +
       `<span style="font-size:12px;line-height:1.5;">This article hasn't been discussed on PubPeer.</span>`;
 
-    const startDiscussion = document.createElement("a");
-    startDiscussion.href = articleDois.length > 0
-      ? `https://pubpeer.com/search?q=${encodeURIComponent(articleDois[0])}`
-      : "https://pubpeer.com/";
-    startDiscussion.target = "_blank";
-    startDiscussion.rel = "noopener";
-    startDiscussion.textContent = "Start a discussion on PubPeer";
-    startDiscussion.style.cssText =
-      "all:unset;cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
-      "color:#853953;border:1px solid #853953;border-radius:6px;transition:background 0.15s;";
-    startDiscussion.addEventListener("mouseenter", () => { startDiscussion.style.background = "#f9f0f4"; });
-    startDiscussion.addEventListener("mouseleave", () => { startDiscussion.style.background = ""; });
-    emptyState.appendChild(startDiscussion);
+    if (onRetryPubPeer) {
+      const labels = emptyState.querySelectorAll("span");
+      labels[0].textContent = "PubPeer unavailable";
+      labels[1].textContent = "Discussion status could not be checked. Other available findings are shown above.";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = "Retry";
+      retry.style.cssText = "cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
+        "color:#853953;border:1px solid #853953;border-radius:6px;background:white;";
+      retry.addEventListener("click", async () => {
+        const hadFocus = document.activeElement === retry;
+        retry.disabled = true;
+        retry.textContent = "Retrying…";
+        try { await onRetryPubPeer(); }
+        finally {
+          retry.disabled = false;
+          retry.textContent = "Retry";
+          // Replacement removes the focused button; do not steal focus if the
+          // user moved elsewhere while the lookup was running.
+          const currentPanel = document.getElementById(PUBPEER_PANEL_ID);
+          if (hadFocus && currentPanel && document.activeElement === document.body) {
+            const target = retry.isConnected ? retry : currentPanel.querySelector<HTMLElement>('[aria-label="Close panel"]');
+            target?.focus({preventScroll: true});
+          }
+        }
+      });
+      emptyState.appendChild(retry);
+    } else {
+      const startDiscussion = document.createElement("a");
+      startDiscussion.href = articleDois.length > 0
+        ? `https://pubpeer.com/search?q=${encodeURIComponent(articleDois[0])}`
+        : "https://pubpeer.com/";
+      startDiscussion.target = "_blank";
+      startDiscussion.rel = "noopener";
+      startDiscussion.textContent = "Start a discussion on PubPeer";
+      startDiscussion.style.cssText =
+        "all:unset;cursor:pointer;margin-top:8px;padding:6px 14px;font-size:12px;font-weight:500;" +
+        "color:#853953;border:1px solid #853953;border-radius:6px;transition:background 0.15s;";
+      startDiscussion.addEventListener("mouseenter", () => { startDiscussion.style.background = "#f9f0f4"; });
+      startDiscussion.addEventListener("mouseleave", () => { startDiscussion.style.background = ""; });
+      emptyState.appendChild(startDiscussion);
+    }
 
     scrollBody.appendChild(emptyState);
   }

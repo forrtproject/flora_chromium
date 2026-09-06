@@ -41,6 +41,22 @@ describe("createIndicatorPanel", () => {
     expect(panel.style.display).not.toBe("none");
   });
 
+  it("retries unavailable FORRT data and displays the recovered result", async () => {
+    const panel = createIndicatorPanel({doi: DOI});
+    document.body.appendChild(panel);
+    const states = new Map<DoiString, LookupState>([[DOI, {status: "error", message: "offline"}]]);
+    updateIndicatorPillBadges(document, states, [], "panels");
+    expect(panel.querySelector("[data-flora-badge-row]")?.textContent).toContain("Unavailable");
+    const state = matchedState(3).get(DOI)!;
+    vi.mocked(chrome.runtime.sendMessage).mockResolvedValue({results: {[DOI]: state.status === "matched" ? state.result : null}, errors: {}});
+    panel.querySelector<HTMLButtonElement>("[data-flora-badge-row] button")!.click();
+    await vi.waitFor(() => expect(panel.querySelector("[data-flora-badge-row]")?.textContent).toContain("3"));
+    expect(panel.querySelector("[data-flora-badge-row] button")).toBeNull();
+    expect(states.get(DOI)?.status).toBe("matched");
+    updateIndicatorPillBadges(document, states, [], "panels");
+    expect(panel.querySelector("[data-flora-badge-row]")?.textContent).toContain("3");
+  });
+
   it("is identifiable as FLoRA's own UI", () => {
     // Otherwise the DOI it prints gets rescanned and the DOM listener loops.
     const panel = createIndicatorPanel({ doi: DOI });

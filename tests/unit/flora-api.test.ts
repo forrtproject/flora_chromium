@@ -14,6 +14,22 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 describe("lookupDOIs", () => {
+  it("reports failed batch DOIs while preserving a later successful batch", async () => {
+    const targets = Array.from({length: 51}, (_, i) => doi(`10.1038/item${i}`));
+    server.use(http.get(API_URL, ({request}) => {
+      const batch = new URL(request.url).searchParams.get("dois")!.split(",");
+      return batch.length === 50
+        ? new HttpResponse(null, {status: 503})
+        : HttpResponse.json({results: {[targets[50]]: mockResult({doi: targets[50]})}});
+    }));
+    const errors: Record<string, string> = {};
+    const results = await lookupDOIs(targets, errors);
+    expect(results.has(targets[50])).toBe(true);
+    expect(Object.keys(errors)).toHaveLength(50);
+    expect(errors[targets[0]]).toMatch(/503/);
+    expect(errors[targets[50]]).toBeUndefined();
+  });
+
   it("returns matched results on 200", async () => {
     const result = mockResult();
     server.use(
@@ -125,7 +141,10 @@ describe("lookupDOIs", () => {
       )
     );
 
-    const results = await lookupDOIs([doi("10.1038/good"), doi("10.1038/bad")]);
+    const errors: Record<string, string> = {};
+    const results = await lookupDOIs([doi("10.1038/good"), doi("10.1038/bad")], errors);
+    expect(errors["10.1038/bad"]).toMatch(/malformed/i);
+    expect(errors["10.1038/good"]).toBeUndefined();
     expect(results.size).toBe(1);
     expect(results.get(doi("10.1038/good"))).toBeTruthy();
     expect(results.has(doi("10.1038/bad"))).toBe(false);

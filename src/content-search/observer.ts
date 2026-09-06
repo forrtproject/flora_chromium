@@ -13,6 +13,30 @@ const SETTLE_MS = 150;
 export function observeSearchResults(adapter: SearchSiteAdapter): void {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
+    const queuePass = (): void => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+            timer = null;
+            void processSearchResults(adapter, document).catch((err) =>
+                debugError(`${adapter.label}: pass on changed search results failed —`, err)
+            );
+        }, SETTLE_MS);
+    };
+    // Same-document navigation may reuse every result node, so no added-row
+    // mutation will arrive. Coalesce rapid history changes and read the final DOM.
+    const navigation = (window as Window & {navigation?: EventTarget & {currentEntry?: {key: string}}}).navigation;
+    let observedUrl = location.href;
+    let observedKey = navigation?.currentEntry?.key;
+    navigation?.addEventListener("currententrychange", () => {
+        const key = navigation.currentEntry?.key;
+        if (observedUrl === location.href && observedKey === key) return;
+        observedUrl = location.href;
+        observedKey = key;
+        queuePass();
+    });
+
+
+
     const observer = new MutationObserver((mutations) => {
         let hasNewRows = false;
         for (const mutation of mutations) {
@@ -31,13 +55,7 @@ export function observeSearchResults(adapter: SearchSiteAdapter): void {
 
         // Frameworks add rows one node at a time; wait for the batch to settle
         // so the pipeline sees them together (one toast, one lookup).
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-            timer = null;
-            void processSearchResults(adapter, document).catch((err) =>
-                debugError(`${adapter.label}: pass on newly loaded rows failed —`, err)
-            );
-        }, SETTLE_MS);
+        queuePass();
     });
 
     observer.observe(document.documentElement, {childList: true, subtree: true});

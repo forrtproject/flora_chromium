@@ -3,6 +3,7 @@ import {
   _resetDebugForTesting,
   debugError,
   debugLog,
+  recentDebugEntries,
   flushDebugLog,
   isDebugEnabled,
   setDebug,
@@ -265,13 +266,52 @@ describe("debug report", () => {
     }) as unknown as typeof chrome.storage.sync.get;
     _resetSettingsCacheForTesting();
 
-    await appendDebugEntries([entry("looked up 10.1234/abc", 1)]);
+    // Simulate an older persisted failure log, before capture-time redaction.
+    localStore[DEBUG_LOG_KEY] = [entry(
+      "Citation: https://api.crossref.org/works/10.1234%2Fabc/transform?mailto=someone%40university.edu failed; contact someone@university.edu", 1,
+    )];
     const { text, entryCount } = await buildDebugReport();
 
     expect(entryCount).toBe(1);
     expect(text).not.toContain("someone@university.edu");
     expect(text).toContain("Contact email configured: yes");
-    expect(text).toContain("looked up 10.1234/abc");
+    expect(text).not.toContain("someone%40university.edu");
+    expect(text).toContain("10.1234%2Fabc/transform?mailto=[redacted]");
+  });
+
+  it("redacts contact addresses before capturing failure diagnostics", () => {
+    debugError("request failed", new Error("https://api.crossref.org/works/10.1234/abc?mailto=someone%40university.edu&rows=5; someone@university.edu"));
+    const captured = recentDebugEntries();
+    expect(captured[0].msg).not.toMatch(/someone(?:@|%40)university\.edu/);
+    const report = renderDebugReport({environment: [], settings: [], entries: captured});
+    expect(report).not.toMatch(/someone(?:@|%40)university\.edu/);
+    expect(report).toContain("mailto=[redacted]&rows=5");
+    expect(report).toContain("10.1234/abc");
+  });
+
+  it("redacts addresses in issue error summaries even without a captured log", () => {
+    const { url } = issueUrl({error: {message: "Failed for someone@university.edu; someone%40university.edu"}});
+    const parsed = new URL(url);
+    expect(parsed.searchParams.get("title")).not.toContain("someone@");
+    expect(parsed.searchParams.get("body")).not.toMatch(/someone(?:@|%40)university\.edu/);
+    expect(parsed.searchParams.get("body")).toContain("[redacted");
+  });
+
+  it("redacts short and encoded addresses in legacy error stacks without losing URL paths", () => {
+    const report = renderDebugReport({environment: [], settings: [], entries: [], error: {
+      message: "Request failed", stack: "at https://example.org/works?contact=someone%40university%2Eedu&doi=10.1234/abc\n at worker (a@localhost; b@x.c)",
+    }});
+    expect(report).not.toContain("someone%40university%2Eedu");
+    expect(report).not.toContain("a@localhost");
+    expect(report).not.toContain("b@x.c");
+    expect(report).toContain("https://example.org/works?contact=[redacted email]&doi=10.1234/abc");
+  });
+
+  it("applies the report size limit after redacting legacy short addresses", () => {
+    const report = renderDebugReport({environment: [], settings: [], entries: Array.from({length: 30}, (_, i) => entry("a@b ".repeat(400), i))});
+    expect(report).not.toContain("a@b");
+    expect(report.length).toBeLessThan(51000);
+    expect(report).toContain("earlier entries trimmed");
   });
 
   it("builds an issue URL that names the domain", () => {

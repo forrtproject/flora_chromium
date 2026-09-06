@@ -31,6 +31,7 @@ export const SCHOLAR: SearchSiteAdapter = {
         if (row.querySelector(".gs_ggs")) return;
         const target = document.createElement("div");
         target.className = "gs_ggs gs_fl";
+        target.setAttribute("data-flora-panel-target", "");
         row.insertBefore(target, row.querySelector(".gs_ri"));
     },
 };

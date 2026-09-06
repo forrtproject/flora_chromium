@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { atlasDoiUrl, bindAtlasLink, needsAtlasSet } from "../../src/shared/flora-atlas";
-import { renderMatchedBanner, removeBanner } from "../../src/content-general/injector";
-import { doi, mockResult } from "../helpers";
+import { doi } from "../helpers";
 import type { DoiString } from "../../src/shared/types";
 
 function dois(count: number, tag: string): DoiString[] {
@@ -29,7 +28,6 @@ describe("atlas links for long DOI lists", () => {
     });
 
     afterEach(() => {
-        removeBanner();
         vi.unstubAllGlobals();
     });
 
@@ -161,14 +159,4 @@ describe("atlas links for long DOI lists", () => {
         expect(heldByBinding).toBe(false);
     });
 
-    it("gives the matched banner's details link a set URL", async () => {
-        vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { cb(0); return 0; });
-        const matched = dois(100, "banner").map((d) => ({ doi: d, result: mockResult() }));
-
-        renderMatchedBanner(matched);
-        await flush();
-
-        const link = document.querySelector<HTMLAnchorElement>("[data-flora-details-link]");
-        expect(link?.href).toBe("https://forrt.org/flora-replication-atlas/?set=abc123");
-    });
 });

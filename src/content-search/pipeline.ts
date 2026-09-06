@@ -8,16 +8,21 @@
 //   4. a title/author/year search via Crossref/OpenAlex (rendered as unconfirmed)
 
 import type {DoiAugmentRequest} from "@shared/doi-augment";
-import {augmentDOIsViaWorker, safeSendMessage} from "@shared/messages";
+import {augmentDOIsViaWorker, isContextInvalidated, safeSendMessage} from "@shared/messages";
 import {retractionCheck} from "@shared/doi-retraction";
 import {validateDOIs} from "@shared/doi-validate";
 import type {DoiString, DoiSource, LookupState, RetractionResponse} from "@shared/types";
 import type {LookupRequest, LookupResponse} from "@shared/messages";
 import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator-pill";
 import {applyPlacement} from "@shared/site-adapters";
+import {showToast} from "@shared/toast";
+import {isSetupComplete} from "@shared/settings";
 import {fetchOpenAccess} from "@shared/openaccess";
+import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork, workSignal} from "@shared/work-cancellation";
+import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
+    waitForWorkToFinish,
     count,
     endWorkIndicator,
     isWorkCancelled,
@@ -35,11 +40,64 @@ const PILL_COLOR = "#853953";
 
 export const PROCESSED_ATTR = "data-flora-processed";
 
+// Failed title resolution waits for an explicit retry or corrected settings.
+// Keeping these rows processed prevents new-result mutations from retrying an outage.
+let unansweredRows = new WeakSet<HTMLElement>();
+let searchRetryToast: HTMLElement | null = null;
+let searchRetryMessage = "";
+let retryingSearchChecks: {page: string; generation: number} | null = null;
+let searchRequiresReload = false;
+
+export async function retryUnansweredSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
+    // Settings can change while the initial lookup is still finishing.
+    const generation = searchNavigationGeneration;
+    await passQueue;
+    if (generation !== searchNavigationGeneration) return;
+    for (const row of root.querySelectorAll<HTMLElement>(adapter.resultRow)) {
+        if (!unansweredRows.has(row)) continue;
+        unansweredRows.delete(row);
+        row.removeAttribute(PROCESSED_ATTR);
+    }
+    if (!searchHidden && canStartAutomaticWork()) await processSearchResults(adapter, root);
+    if (generation === searchNavigationGeneration) await updateSearchRetry(adapter, root);
+}
+
 // Replication results and retraction notices arrive from two independent async
 // paths. Both accumulate here and re-render together: updating the badges from
 // only one source would drop whatever the other had already resolved.
 const lookupState = new Map<DoiString, LookupState>();
 const retractions = new Map<DoiString, RetractionResponse>();
+const unavailableRetractionDois = new Set<DoiString>();
+let retractionPage = location.href;
+let searchNavigationGeneration = 0;
+function clearResultRow(row: HTMLElement): void {
+    row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+    row.querySelectorAll("[data-flora-panel-target]").forEach(target => {
+        if (!target.hasChildNodes()) target.remove();
+    });
+    row.removeAttribute(PROCESSED_ATTR);
+}
+
+type PageNavigation = EventTarget & {currentEntry?: {key: string}};
+const pageNavigation = (window as Window & {navigation?: PageNavigation}).navigation;
+let lastPageEntryKey = pageNavigation?.currentEntry?.key;
+function syncRetractionPage(): void {
+    const entryKey = pageNavigation?.currentEntry?.key;
+    if (retractionPage === location.href && lastPageEntryKey === entryKey) return;
+    lastPageEntryKey = entryKey;
+    retractionPage = location.href;
+    searchNavigationGeneration++;
+    retryingSearchChecks = null;
+    unavailableRetractionDois.clear();
+    lookupState.clear();
+    retractions.clear();
+    for (const row of document.querySelectorAll<HTMLElement>(`[${PROCESSED_ATTR}]`)) clearResultRow(row);
+    unansweredRows = new WeakSet();
+    dismissSearchRetry();
+}
+// Available since Chrome 102. Unlike a content-world history patch, this sees
+// the page's pushState/replaceState calls, even A → B → A between scan passes.
+pageNavigation?.addEventListener("currententrychange", syncRetractionPage);
 
 function refreshBadges(): void {
     updateIndicatorPillBadges(document, lookupState, [...retractions.values()], "panels");
@@ -51,6 +109,8 @@ let searchHidden = false;
 
 export function setSearchHidden(hidden: boolean): void {
     searchHidden = hidden;
+    if (!hidden) resumeAutomaticWork();
+    if (!hidden) refreshBadges();
 }
 
 export function isSearchHidden(): boolean {
@@ -62,12 +122,29 @@ export function isSearchHidden(): boolean {
 // instead; each one reads the page when its turn comes, so it picks up every
 // row the earlier passes left unprocessed.
 let passQueue: Promise<void> = Promise.resolve();
+const pendingPasses = new Map<SearchSiteAdapter, Map<ParentNode, Promise<void>>>();
 
 /** Process every not-yet-processed row under `root`, holding one work
  *  indicator across the batch — extraction through to badges. Passes run one
  *  at a time, in call order. */
 export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    const next = passQueue.then(() => runQueuedPass(adapter, root));
+    syncRetractionPage();
+    if (!canStartAutomaticWork()) return Promise.resolve();
+    let pending = pendingPasses.get(adapter);
+    if (!pending) pendingPasses.set(adapter, pending = new Map());
+    const existing = pending.get(root);
+    if (existing) return existing;
+    const next = passQueue.then(async () => {
+        try {
+            if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
+            pending!.delete(root);
+            await runQueuedPass(adapter, root);
+        } finally {
+            if (pending!.get(root) === next) pending!.delete(root);
+            if (pending!.size === 0 && pendingPasses.get(adapter) === pending) pendingPasses.delete(adapter);
+        }
+    });
+    pending.set(root, next);
     // Keep the queue itself clean: a rejected pass is reported to its own
     // caller, and must not fail every pass scheduled after it.
     passQueue = next.catch(() => {});
@@ -75,18 +152,25 @@ export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNod
 }
 
 async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    if (searchHidden) {
+    if (searchHidden || !canStartAutomaticWork()) {
         debugLog(`${adapter.label}: paused on this site — skipping the pass`);
         return;
     }
+    // A replaced result container may discard the failed rows without changing the URL.
+    if (searchRetryMessage) await updateSearchRetry(adapter, document);
     const rows = root.querySelectorAll<HTMLElement>(`${adapter.resultRow}:not([${PROCESSED_ATTR}])`);
     debugLog(`${adapter.label}: ${rows.length} new result row(s) to process`);
     if (rows.length === 0) return;
 
+    const generation = searchNavigationGeneration;
     beginWorkIndicator({stages: ["scan", "validate", "augment", "lookup", "report"]});
     try {
         await runPass(adapter, rows);
     } finally {
+        if (generation === searchNavigationGeneration && isWorkCancelled()) {
+            // A panel is placed before its lookup completes; it is not evidence of completion.
+            for (const row of rows) clearResultRow(row);
+        }
         endWorkIndicator();
     }
 }
@@ -104,10 +188,14 @@ interface ResolvedRow {
 
 async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>): Promise<void> {
     const {label} = adapter;
+    const generation = searchNavigationGeneration;
+    const navigated = () => generation !== searchNavigationGeneration;
     reportWorkStage("scan", `Reading ${count(rows.length, `${label} result`)}…`);
 
     const resolved: ResolvedRow[] = [];
+    let hasUnansweredTitles = false;
     const place = (info: RowInfo, doi: DoiString, source: DoiSource, isAugmented: boolean, provenanceLabel?: string): void => {
+        if (navigated()) return;
         resolved.push({row: info.row, title: info.title, doi, source});
         void placePanel(adapter, info.row, doi, isAugmented, provenanceLabel);
     };
@@ -116,6 +204,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     // queue for site-id resolution, validation and augmentation.
     let pending: RowInfo[] = [];
     for (const row of rows) {
+        unansweredRows.delete(row);
         row.setAttribute(PROCESSED_ATTR, "true");
         let extraction: RowExtraction | null;
         try {
@@ -145,6 +234,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         } catch (err) {
             debugWarn(`${label}: id resolution failed for ${withSiteId.length} row(s) —`, err);
         }
+        if (navigated()) return;
         for (const info of withSiteId) {
             const doi = bySiteId.get(info.siteId!) ?? null;
             updateWorkItem(info.siteId!, doi ? "done" : "failed", doi ?? "no DOI on record");
@@ -171,6 +261,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         } catch (err) {
             debugWarn(`${label}: validation failed for ${doisToValidate.length} DOI(s) —`, err);
         }
+        if (navigated()) return;
         for (const doi of doisToValidate) {
             updateWorkItem(doi, validated.get(doi) ? "done" : "failed");
         }
@@ -188,6 +279,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     // ask once per distinct title, and give the toast one item for it.
     if (pending.length > 0) {
         const byTitle = new Map<string, RowInfo>();
+        if (navigated()) return;
         for (const info of pending) {
             if (info.title && !byTitle.has(info.title)) byTitle.set(info.title, info);
         }
@@ -201,11 +293,23 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             try {
                 augmented = await augmentDOIsViaWorker(requests);
             } catch (err) {
+                if (navigated()) return;
+                if (isContextInvalidated(err)) {
+                    for (const row of rows) clearResultRow(row);
+                    if (!searchHidden && !isWorkCancelled()) {
+                        searchRequiresReload = true;
+                        showToast("ORE was updated — reload this page to run checks.", {
+                            action: {label: "Reload", onClick: () => location.reload()},
+                        });
+                    }
+                    return;
+                }
                 debugWarn(`${label}: augmentation failed for ${requests.length} row(s) —`, err);
             }
+            if (navigated()) return;
             for (const info of titled) {
                 const doi = augmented.get(info.title) ?? null;
-                updateWorkItem(info.title, doi ? "done" : "failed", doi ?? "no DOI found");
+                updateWorkItem(info.title, doi ? "done" : "failed", doi ?? (augmented.has(info.title) ? "no DOI found" : "not checked"));
             }
             if (isWorkCancelled()) return;
         }
@@ -229,6 +333,7 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             }
         }
 
+        if (isWorkCancelled()) return;
         for (const info of pending) {
             const augmentedDoi = augmented.get(info.title) ?? null;
             const extractedDoi = info.doi;
@@ -266,12 +371,20 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
             } else if (augmentedDoi) {
                 debugLog(`${label} resolve [augmented-only] "${info.title}" → ${augmentedDoi} (no extraction)`);
                 place(info, augmentedDoi, "augmented", true);
+            } else if (info.title && !augmented.has(info.title)) {
+                unansweredRows.add(info.row);
+                hasUnansweredTitles = true;
+                debugLog(`${label} resolve [title-unanswered] "${info.title}" → waiting for retry`);
             } else {
                 debugLog(`${label} resolve [no-doi] "${info.title}" → no DOI from extraction or augmentation`);
             }
         }
     }
 
+    if (navigated()) return;
+    if (hasUnansweredTitles) await updateSearchRetry(adapter, document);
+
+    if (navigated()) return;
     const extractedCount = resolved.filter((r) => r.source === "extracted").length;
     debugLog(`${extractedCount} DOIs from ${label}, ${resolved.length - extractedCount} augmented via Crossref/OpenAlex`);
     if (resolved.length === 0) return;
@@ -285,17 +398,37 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
     }
     setWorkItems(uniqueDois.map((doi) => workItem(doi, titleByDoi.get(doi) ?? doi, doi)));
     const request: LookupRequest = {type: "FLORA_LOOKUP", dois: uniqueDois};
+    const previousLookupState = new Map(uniqueDois.map(doi => [doi, lookupState.get(doi)]));
+    for (const doi of uniqueDois) lookupState.set(doi, {status: "loading"});
+    refreshBadges();
 
     try {
         const response = await safeSendMessage<LookupResponse>(request);
-        if (!response) return; // extension reloaded underneath this page — stop quietly
+        if (navigated()) return;
+        if (!response) {
+            // This script belongs to an extension version that has been replaced.
+            // Provider retry cannot reconnect it; remove incomplete panels and explain recovery.
+            for (const doi of uniqueDois) lookupState.delete(doi);
+            for (const {row} of resolved) clearResultRow(row);
+            if (!searchHidden && !isWorkCancelled()) {
+                searchRequiresReload = true;
+                showToast("ORE was updated — reload this page to run checks.", {
+                    action: {label: "Reload", onClick: () => location.reload()},
+                });
+            }
+            return;
+        }
         debugLog(`${label}: Lookup response:`, Object.keys(response.results).length, "results,", Object.keys(response.errors).length, "errors");
 
         let badgedCount = 0;
         for (const {doi, source} of resolved) {
-            if (response.results[doi]) {
+            if (response.errors[doi]) {
+                lookupState.set(doi, {status: "error", message: response.errors[doi]});
+            } else if (response.results[doi]) {
                 lookupState.set(doi, {status: "matched", result: response.results[doi], source});
                 badgedCount++;
+            } else {
+                lookupState.set(doi, {status: "no-match"});
             }
         }
         for (const doi of uniqueDois) {
@@ -308,10 +441,22 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         if (searchHidden || isWorkCancelled()) return;
 
         reportWorkStage("report", `Marking up ${count(badgedCount, "result")}…`);
-        refreshBadges();
         debugLog(`${label}: Rendered`, badgedCount, "badge(s)");
     } catch (err) {
-        debugLog(`${label}: Lookup failed:`, err);
+        if (navigated()) return;
+        for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "FORRT unavailable"});
+        if (!isWorkCancelled()) debugLog(`${label}: Lookup failed:`, err);
+    } finally {
+        if (!navigated() && isWorkCancelled()) {
+            // A repeated DOI can already belong to a completed earlier row.
+            // Cancelling this pass must restore that row's prior result.
+            for (const [doi, previous] of previousLookupState) {
+                if (previous) lookupState.set(doi, previous);
+                else lookupState.delete(doi);
+            }
+            for (const {row} of resolved) clearResultRow(row);
+            if (!searchHidden) refreshBadges();
+        } else if (!navigated() && !searchHidden) refreshBadges();
     }
 }
 
@@ -329,6 +474,107 @@ function rowByline(info: {firstAuthor: string | null; year: number | null}): str
 /** One work-toast item, pending until its stage reports back on it. */
 function workItem(id: string, label: string, detail?: string): WorkItem {
     return {id, label: stripTypeTags(label) || id, detail, status: "pending"};
+}
+
+function dismissSearchRetry(): void {
+    // Other alerts share the host, including Reload: remove only our current message.
+    if (searchRetryMessage && searchRetryToast?.textContent?.includes(searchRetryMessage)) searchRetryToast.remove();
+    searchRetryToast = null;
+    searchRetryMessage = "";
+}
+
+/** A single retry keeps either failure from hiding the other provider's recovery action. */
+async function updateSearchRetry(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
+    const pageUrl = location.href;
+    const generation = searchNavigationGeneration;
+    const titleMatchingEnabled = await isSetupComplete();
+    if (searchHidden || isWorkCancelled() || searchRequiresReload || retryingSearchChecks || location.href !== pageUrl || generation !== searchNavigationGeneration) return;
+    const titleFailed = titleMatchingEnabled && [...root.querySelectorAll<HTMLElement>(adapter.resultRow)]
+        .some(row => unansweredRows.has(row));
+    const noticesFailed = retractionPage === pageUrl && unavailableRetractionDois.size > 0;
+    if (!titleFailed && !noticesFailed) {
+        dismissSearchRetry();
+        return;
+    }
+    searchRetryMessage = titleFailed && noticesFailed
+        ? "ORE: DOI matching and retraction checks unavailable. Other results are still shown."
+        : titleFailed ? "ORE: DOI matching unavailable for some results."
+        : "ORE: Retraction checks unavailable. Other results are still shown.";
+    searchRetryToast = showToast(searchRetryMessage, {
+        tone: "info", duration: 0, dismissOnAction: false,
+        action: {label: "Retry", onClick: () => {
+            if (location.href !== pageUrl || generation !== searchNavigationGeneration) {
+                if (generation === searchNavigationGeneration) dismissSearchRetry();
+                return;
+            }
+            if (searchHidden || retryingSearchChecks) return;
+            void retryFailedSearchChecks(adapter, root).catch(error => debugWarn("Search checks retry failed —", error));
+        }},
+    });
+}
+
+async function retryFailedSearchChecks(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
+    const pageUrl = location.href;
+    const generation = searchNavigationGeneration;
+    const queued = {page: pageUrl, generation};
+    retryingSearchChecks = queued;
+    const navigated = () => location.href !== pageUrl || generation !== searchNavigationGeneration;
+    const clickedSignal = workSignal();
+    const wasCancelled = clickedSignal.aborted;
+    try {
+        await passQueue;
+        await waitForWorkToFinish();
+        if (searchHidden || navigated() || (!wasCancelled && clickedSignal.aborted)) return;
+        // New panels run their own notice checks; retry only failures already known at the click.
+        const failedNotices = retractionPage === pageUrl ? [...unavailableRetractionDois] : [];
+        resumeAutomaticWork();
+        beginWorkIndicator({stages: ["augment", "notices"]});
+        try {
+            await retryUnansweredSearchResults(adapter, root);
+            if (searchHidden || isWorkCancelled() || searchRequiresReload || navigated()) return;
+            if (failedNotices.length > 0) {
+                const recovered = await checkSearchRetractions(failedNotices, adapter);
+                if (searchHidden || isWorkCancelled() || navigated()) return;
+                for (const notice of recovered) retractions.set(notice.originDoi, notice);
+                refreshBadges();
+            }
+        } finally { endWorkIndicator(); }
+    } finally {
+        if (retryingSearchChecks === queued) retryingSearchChecks = null;
+        if (!navigated()) await updateSearchRetry(adapter, root);
+    }
+}
+
+/** Retry only the unavailable notice lookups; already placed rows stay intact. */
+async function checkSearchRetractions(dois: DoiString[], adapter: SearchSiteAdapter): Promise<RetractionResponse[]> {
+    const passUrl = location.href;
+    syncRetractionPage();
+    const generation = searchNavigationGeneration;
+    const navigated = () => location.href !== passUrl || generation !== searchNavigationGeneration;
+    const signal = activeWorkSignal();
+    const stale = () => signal?.aborted || searchHidden || isWorkCancelled() || navigated();
+    try {
+        const notices = await retractionCheck(dois);
+        if (stale()) return [];
+        const hadFailures = unavailableRetractionDois.size > 0;
+        for (const doi of dois) unavailableRetractionDois.delete(doi);
+        if (hadFailures && unavailableRetractionDois.size === 0) await updateSearchRetry(adapter, document);
+        return stale() ? [] : notices;
+    } catch (error) {
+        if (stale()) return [];
+        const hadFailures = unavailableRetractionDois.size > 0;
+        for (const doi of dois) unavailableRetractionDois.add(doi);
+        if (error instanceof Error && error.message.includes("Extension context invalidated")) {
+            searchRequiresReload = true;
+            showToast("ORE was updated — reload this page to run checks.", {
+                action: {label: "Reload", onClick: () => location.reload()},
+            });
+            return [];
+        }
+        debugWarn("Retraction checks unavailable —", error);
+        if (!hadFailures) await updateSearchRetry(adapter, document);
+        return [];
+    }
 }
 
 /** Build the row's panel, place it per the adapter, then fetch its retraction status. */
@@ -352,7 +598,7 @@ async function placePanel(
         if (!applyPlacement(adapter.panelPlacement, row, panel, `${adapter.label} panel`)) {
             row.appendChild(panel);
         }
-        const notices = await retractionCheck([doi]);
+        const notices = await checkSearchRetractions([doi], adapter);
         if (notices?.[0]) {
             retractions.set(doi, notices[0]);
             refreshBadges();

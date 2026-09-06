@@ -2,7 +2,6 @@ name: Test
 
 on:
   pull_request:
-    branches: [ main ]
 
 jobs:
   test:
@@ -14,5 +13,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run typecheck
+      - name: Verify visual approval policy
+        run: node --test tests/visual/publisher.test.cjs
       - run: npm run test
       - run: npm run build

@@ -77,9 +77,9 @@
             Left to right: whether the DOI was read off the page or found by
             search, whether a free full text exists, whether the paper is
             discussed on PubPeer, and how many replications or reproductions are
-            on record. A dimmed segment means nothing was found for that signal —
-            it never disappears. Point at the pill and each segment opens into a
-            row you can read and act on; click to keep it open.
+            on record. A dimmed segment can mean nothing was found, or that the
+            check is pending or unavailable. Point at the pill to read each
+            status and available action; click to keep it open.
           </p>
           <figure class="shot plain wide">
             <img
@@ -252,8 +252,8 @@
             <div>
               <h3>Settings</h3>
               <p>
-                Set the contact email that Crossref, OpenAlex and Unpaywall ask
-                for, choose your citation style — copied with its italics
+                Set or remove the API contact email sent to Crossref, OpenAlex,
+                Unpaywall and NCBI, choose your citation style — copied with its italics
                 intact, so it pastes into Word or Google Docs correctly
                 formatted — cap how much cache is kept, manage the domain
                 blocklist, and mute PubPeer commenters you would rather not
@@ -292,10 +292,13 @@
             <li>Turn on <strong>Developer mode</strong>, top right.</li>
             <li>Click <strong>Load unpacked</strong> and select the unzipped folder.</li>
             <li>
-              Enter your email address on the settings page that opens. Crossref,
-              OpenAlex and Unpaywall ask for a contact address so they can put
-              your lookups in their faster “polite” pool; titles cannot be resolved
-              to DOIs without it.
+              The welcome tour opens after installation. Choose <strong>Open
+              Settings</strong> at the end, or <strong>Skip to Settings</strong>,
+              to optionally enter a contact email.
+              ORE needs it for title-to-DOI matching and Unpaywall lookups.
+              Existing DOI, replication, retraction and PubPeer checks work
+              without it. The address accompanies Crossref, OpenAlex, Unpaywall and
+              NCBI requests.
             </li>
           </ol>
           <div class="callout">
@@ -317,8 +320,8 @@
           <h2>Privacy, briefly</h2>
           <p>
             ORE has no accounts, no analytics and no tracking. What leaves
-            your browser is paper identifiers — DOIs — and the contact email you
-            entered in settings, which goes to Crossref, OpenAlex and Unpaywall
+            your browser includes paper identifiers, article titles and the contact email you
+            entered in settings, which goes to Crossref, OpenAlex, Unpaywall and NCBI
             as the address they ask for. Retractions are checked entirely on
             your own machine against a list downloaded once a week, so no
             DOI is ever sent anywhere to ask “was this retracted?”.

@@ -44,6 +44,20 @@ describe("LocalCache", () => {
     expect(await cache.get("key1")).toBeNull();
   });
 
+  it("expires a confirmed no-match exactly five minutes after writing", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const cache = new LocalCache<never>("flora:no-match", 0);
+      await cache.setMany([["doi", null]], 300_000);
+      now.mockReturnValue(1_299_999);
+      expect((await cache.getMany(["doi"])).has("doi")).toBe(true);
+      now.mockReturnValue(1_300_000);
+      expect((await cache.getMany(["doi"])).has("doi")).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("returns undefined for expired entries", async () => {
     const cache = new LocalCache<string>("test");
     await cache.set("key1", "hello", 1000); // 1s TTL

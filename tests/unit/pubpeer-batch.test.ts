@@ -1,3 +1,4 @@
+import {beginCancellableWork, endCancellableWork, cancelWork} from "../../src/shared/work-cancellation";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   lookupPubPeerForDoi,
@@ -55,8 +56,35 @@ describe("lookupPubPeerForDoi batching", () => {
   });
 
   afterEach(() => {
+    endCancellableWork();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     _resetPubPeerCacheForTesting();
+  });
+
+  it("drops cancelled queued batches after the scan indicator ends", async () => {
+    vi.useFakeTimers();
+    beginCancellableWork();
+    const pending = lookupPubPeerForDoi("10.1234/a");
+    const outcome = expect(pending).rejects.toMatchObject({name: "AbortError"});
+    cancelWork();
+    endCancellableWork();
+    await vi.advanceTimersByTimeAsync(50);
+    await outcome;
+    expect(fetchMock).not.toHaveBeenCalled();
+    const retry = lookupPubPeerForDoi("10.1234/a");
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await retry)?.total_comments).toBe(3);
+  });
+
+  it("does not attach an idle lookup to a scan started during its batching window", async () => {
+    vi.useFakeTimers();
+    const pending = lookupPubPeerForDoi("10.1234/a");
+    beginCancellableWork();
+    cancelWork();
+    await vi.advanceTimersByTimeAsync(50);
+    expect((await pending)?.total_comments).toBe(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces concurrent single-DOI lookups into one request", async () => {
@@ -89,8 +117,11 @@ describe("lookupPubPeerForDoi batching", () => {
     expect(second?.total_comments).toBe(3);
   });
 
-  it("resolves to null rather than rejecting when the request fails", async () => {
+  it("rejects failures without caching them, so a later retry can succeed", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
+    await expect(lookupPubPeerForDoi("10.1234/a")).rejects.toThrow("PubPeer unavailable");
+    fetchMock.mockResolvedValue({ok: true, status: 200, json: async () => ({feedbacks: []})});
     await expect(lookupPubPeerForDoi("10.1234/a")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -33,7 +33,7 @@
     <main class="prose">
       <h1>Privacy Policy</h1>
       <p class="updated">
-        FORRT ORE — Open Research Extension · Last updated 4 August 2026
+        FORRT ORE — Open Research Extension · Last updated 6 September 2026
       </p>
 
       <p>
@@ -49,7 +49,7 @@
           <strong>The short version.</strong> No account, no analytics, no
           tracking, no advertising. What leaves your browser is paper
           identifiers (DOIs) and article titles, plus the contact email you
-          enter in settings, which is passed to Crossref, OpenAlex and Unpaywall
+          enter in settings, which is passed to Crossref, OpenAlex, Unpaywall and NCBI
           because those services ask for one. Retraction checks happen entirely
           on your own device.
         </p>
@@ -96,15 +96,17 @@
         <li>
           <strong>Your contact email address</strong>, if you enter one in
           settings. It is used solely as the <code>mailto</code> /
-          <code>email</code> parameter that Crossref, OpenAlex and Unpaywall ask
-          API users to supply so that requests can be placed in their faster
-          “polite” pool. It is stored in your browser, is sent to those three
+          <code>email</code> parameter that Crossref, OpenAlex, Unpaywall and NCBI ask
+          API users to supply as a contact address. It is stored in Chrome's
+          sync storage, is sent to those four
           services only, and is never sent to FORRT's own servers.
         </li>
         <li>
           <strong>The URL and hostname of the current page</strong>, used within
           your browser to scope scanning and to apply your per-domain settings.
-          URLs are not transmitted to FORRT or to any third party.
+          Article-page PubPeer lookups also send the page URL to PubPeer.
+          If you choose to report an
+          issue, the report may include page information; review it before sharing.
         </li>
         <li>
           <strong>Google Sheets content</strong>, when you have a Google Sheet
@@ -118,8 +120,8 @@
       <p>The Extension does not collect:</p>
       <ul>
         <li>Names, accounts or sign-in details — there is no account to create</li>
-        <li>Browsing history, or any record of the pages you visit</li>
-        <li>Analytics, telemetry, crash reports or usage statistics</li>
+        <li>Browsing history for tracking or analytics</li>
+        <li>Automatic analytics, telemetry or crash reporting</li>
         <li>Cookies for tracking or advertising</li>
       </ul>
 
@@ -127,8 +129,8 @@
       <ul>
         <li>
           <strong>Settings</strong> (<code>chrome.storage.sync</code>): your
-          contact email, citation style, DOI-pill display preference, cache
-          limit, disabled domains and muted PubPeer commenters. Because this
+          contact email, citation style, cache limit, disabled domains, muted
+          PubPeer commenters and the “Offer Copy log after each pass” preference. Because this
           uses Chrome's sync storage, these settings are synchronised across
           browsers you are signed into — that synchronisation is performed by
           Chrome under your Google account, not by FORRT.
@@ -137,12 +139,22 @@
           <strong>Cache</strong> (<code>chrome.storage.local</code>): results of
           the lookups described above, together with the retraction list, kept
           so that revisiting a paper does not repeat every request. Entries
-          expire, and the cache is held to a size limit you can change in
-          settings (50 MB by default), with the oldest entries removed first. It
+          expire, and a shared soft limit covers all provider caches
+          (50 MB by default). Expired entries are removed first, then older
+          entries; some provider caches are removed as a whole. Settings and
+          diagnostic reports are outside this limit. The cache
           stays on your device and is never transmitted. Uninstalling the
           Extension, or clearing its storage from your browser, removes it.
         </li>
       </ul>
+
+      <p>
+        <strong>Optional diagnostics:</strong> debug mode stores a bounded local
+        log, which can contain paper identifiers, titles and page information.
+        The issue-reporting tools let you review, copy, download or clear a
+        report before sharing it on GitHub. Your configured contact email is
+        excluded from reports; nothing is submitted automatically.
+      </p>
 
       <h2>5. Services the Extension contacts</h2>
       <p>
@@ -160,8 +172,8 @@
         <tbody>
           <tr>
             <td>FORRT replication API (<code>rep-api.forrt.org</code>)</td>
-            <td>DOIs, in batches</td>
-            <td>Replication and reproduction records</td>
+            <td>DOIs, in batches; DOI lists for long Atlas links</td>
+            <td>Replication and reproduction records; storing DOI sets referenced by a shorter Atlas link</td>
           </tr>
           <tr>
             <td><a href="https://www.crossref.org/">Crossref</a></td>
@@ -171,7 +183,7 @@
           <tr>
             <td><a href="https://openalex.org/">OpenAlex</a></td>
             <td>Titles, OpenAlex work ids, your contact email</td>
-            <td>Resolving titles to DOIs when Crossref finds no match; resolving OpenAlex search results to DOIs</td>
+            <td>Resolving titles to DOIs; resolving OpenAlex search results to DOIs</td>
           </tr>
           <tr>
             <td><a href="https://www.semanticscholar.org/">Semantic Scholar</a></td>
@@ -185,7 +197,7 @@
           </tr>
           <tr>
             <td><a href="https://pubpeer.com/">PubPeer</a></td>
-            <td>DOIs</td>
+            <td>DOIs and, for article-page lookups, the current page URL</td>
             <td>Post-publication comment counts and threads</td>
           </tr>
           <tr>
@@ -195,7 +207,7 @@
           </tr>
           <tr>
             <td>PubMed Central ID converter (NCBI)</td>
-            <td>DOIs, PMC identifiers or PubMed ids</td>
+            <td>DOIs, PMC identifiers or PubMed ids, your contact email if set</td>
             <td>Locating PMC-hosted full text; resolving PubMed and Europe PMC search results to DOIs</td>
           </tr>
           <tr>
@@ -218,6 +230,17 @@
           </tr>
         </tbody>
       </table>
+      <p>
+        Title matching alternates which of Crossref or OpenAlex is queried first.
+        The other service is contacted when the first fails or returns no single
+        DOI. Both may therefore receive the same title.
+      </p>
+      <p>
+        For a long Atlas link, ORE sends the DOI list to FORRT to create a stored
+        set and uses its identifier in the link. This happens while preparing
+        the link, before you click it. The separate Meta Report share link
+        encodes its report in the URL fragment instead.
+      </p>
       <p>
         <strong>Retraction status is determined locally.</strong> The Extension
         downloads the retraction list about once a week and checks papers
@@ -248,9 +271,11 @@
       <h2>7. Retention</h2>
       <ul>
         <li>
-          <strong>Lookups sent to the FORRT API</strong> are used to answer the
-          request and are not logged. No record is kept of which DOIs were
-          looked up, or of who looked them up.
+          <strong>FORRT API requests</strong> retrieve evidence for the submitted
+          DOIs. DOI sets created for long Atlas links are stored by FORRT so
+          those links can retrieve the list later; they are separate from the
+          lookup cache on your device. Clearing extension storage does not
+          delete a server-side DOI set.
         </li>
         <li>
           <strong>Third-party services</strong> (Crossref, OpenAlex, Unpaywall,
@@ -284,7 +309,7 @@
         In practice, FORRT holds nothing that identifies you: there is no
         account, the Extension's data lives in your own browser, and the only
         personal datum involved — your contact email — is stored on your device
-        and sent onward only to Crossref, OpenAlex and Unpaywall. You can
+        and sent onward only to Crossref, OpenAlex, Unpaywall and NCBI. You can
         exercise the practical equivalent of these rights yourself at any time
         by editing or clearing your email in settings, clearing the Extension's
         storage, or uninstalling it. If you would like FORRT to look into
@@ -311,7 +336,8 @@
         All requests are made over HTTPS. Data stored locally is subject to your
         browser's own security model. The Extension requests only the browser
         permissions it needs — storage, extended storage for its cache, and
-        access to the tab you are actively viewing — and its full source code is
+        access to the tab you are actively viewing, plus alarms for scheduled
+        maintenance — and its full source code is
         <a href="https://github.com/forrtproject/chromium-extension">public</a>.
       </p>
 

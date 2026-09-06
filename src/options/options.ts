@@ -31,16 +31,17 @@ getSettings().then(({ email }) => {
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = emailInput.value.trim();
-  if (!email) return;
 
   saveBtn.disabled = true;
   try {
     await saveSettings({ email });
     statusMsg.textContent =
-      "Saved! ORE is now active — reload any open tabs to start tracking.";
+      email
+        ? "Email saved. Reload open tabs to use it for lookups."
+        : "Email removed. Reload open tabs. Title matching and open-access lookups need an email; other checks still work.";
     statusMsg.className = "status success";
     statusMsg.hidden = false;
-    saveBtn.textContent = "Save";
+    saveBtn.textContent = email ? "Save" : "Save contact email";
   } catch (err) {
     debugError("Settings: save failed —", err);
     statusMsg.textContent = "Failed to save — please try again.";

@@ -172,12 +172,11 @@
                       </svg>
                     </div>
                     <div class="wt-callout-body">
-                      <div class="wt-callout-title">A dash means "nothing found"</div>
+                      <div class="wt-callout-title">Read the status in each row</div>
                       <div class="wt-callout-text">
-                        Rows stay in place when a lookup comes back empty
-                        rather than disappearing, so the panel is the same
-                        shape on every result and you can tell "no free copy"
-                        apart from "not checked yet".
+                        Rows stay in place while checks run and when nothing
+                        is found. Read the status to distinguish an empty result
+                        from a check that is still pending or unavailable.
                       </div>
                     </div>
                   </div>
@@ -356,12 +355,11 @@
                       </svg>
                     </div>
                     <div class="wt-callout-body">
-                      <div class="wt-callout-title">References are not all pilled</div>
+                      <div class="wt-callout-title">Pills identify recognised references</div>
                       <div class="wt-callout-text">
-                        By default a reference gets a pill only where its DOI is
-                        not already printed on the page, to keep a bibliography
-                        readable. Settings has a switch for a pill on every
-                        reference.
+                        Each recognised reference gets a pill. When its DOI is
+                        already linked on the page, ORE places the pill after
+                        that link; otherwise it adds one beside the reference.
                       </div>
                     </div>
                   </div>
@@ -447,8 +445,9 @@
                 <p class="wt-desc">
                   When closed, the pill answers one question per icon: is there a
                   DOI, a free copy, a discussion, a replication. A
-                  <strong>dimmed</strong> icon means nothing was found. The icons
-                  never move, so the pill is the same width on every paper.
+                  <strong>dimmed</strong> icon is not a guarantee that a check
+                  succeeded. Open the panel for the current status. Icons stay
+                  in the same order; counts can make the pill wider.
                 </p>
                 <p class="wt-desc">
                   <strong>Point at it and the full panel opens</strong>, turning
@@ -513,8 +512,8 @@
                   </div>
                   <div class="demo-board-row">
                     <div class="demo-board-label">
-                      <strong>Nothing found</strong>
-                      <span>Same shape, all four dimmed — ORE looked and came back empty</span>
+                      <strong>No positive signals</strong>
+                      <span>Dimmed icons: open the panel to see whether checks completed</span>
                     </div>
                     <div class="demo-board-art" data-demo="pill-no-signals"></div>
                   </div>
@@ -835,8 +834,8 @@
                 <span class="wt-step-num">9 of 9</span>
                 <h1 class="wt-title wt-title-lead">That's all of it</h1>
                 <p class="wt-desc wt-desc-lead">
-                  ORE runs only on the tab you are actually looking at, and only
-                  looks up the papers on it. While it works, a small note sits in
+                  ORE checks the papers on supported pages as you browse.
+                  While it works, a small note sits in
                   the bottom corner of the page and then disappears — that is the
                   whole of its footprint until it has something to tell you.
                 </p>
@@ -870,7 +869,9 @@
                       <h3>Add your email</h3>
                       <p>
                         Unpaywall asks for a contact address before it will
-                        report free copies. Nothing else uses it.
+                        report free copies. ORE also sends it to Crossref,
+                        OpenAlex and NCBI for identifier and citation lookups.
+                        You can remove it in Settings.
                       </p>
                     </div>
                   </div>
@@ -892,7 +893,7 @@
                 </div>
 
                 <p class="wt-footnote">
-                  You can reopen this tour any time from Settings.
+                  Reopen this tour from the ORE toolbar popup: choose “How it works”.
                 </p>
               </div>
             </div>

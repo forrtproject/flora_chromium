@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import type { DoiString } from "./types";
 import { debugLog, debugWarn } from "./debug";
 import { BlobCache } from "./blob-cache";
@@ -18,15 +19,6 @@ const VALIDATION_CACHE = new BlobCache<{ valid: boolean }>({
   ttlMs: CACHE_TTL,
   legacyPrefixes: ["flora_doival:"],
 });
-
-/**
- * Check whether a single DOI resolves via doi.org.
- * Results are cached in chrome.storage.local for 7 days.
- */
-export async function validateDOI(doi: DoiString): Promise<boolean> {
-  const result = await validateDOIs([doi]);
-  return result.get(doi) ?? false;
-}
 
 /**
  * Validate multiple DOIs in parallel via the doi.org Handle System API.
@@ -59,7 +51,7 @@ export async function validateDOIs(
   debugLog(`DOI validation: ${uncached.length} uncached DOI(s) to check`);
 
   // Validate uncached DOIs in parallel. A DOI is recorded `false` only when
-  // doi.org *definitively* reports it absent (HTTP 404, or responseCode ≠ 1).
+  // doi.org *definitively* reports it absent (HTTP 404, or responseCode 100).
   // Transient failures — network errors, rate limits, 5xx — leave the DOI out
   // of the result map entirely so callers treat it as "unknown" and don't drop
   // a possibly-valid DOI. (Marking it invalid here permanently strands the
@@ -76,7 +68,7 @@ export async function validateDOIs(
       // encodeURIComponent on the full DOI would collapse all '/' to %2F,
       // making the server see a single opaque segment instead of a path.
       const encodedHandle = doi.split("/").map(encodeURIComponent).join("/");
-      const response = await fetch(`${HANDLE_API}${encodedHandle}`);
+      const response = await fetchWithDeadline(`${HANDLE_API}${encodedHandle}`);
       if (!response.ok) {
         // 404 = the Handle System has no record of this DOI → invalid.
         // Any other non-OK status (429, 5xx) is transient — leave unknown.
@@ -87,7 +79,11 @@ export async function validateDOIs(
         return;
       }
       const data = (await response.json()) as { responseCode?: number };
-      // responseCode 1 = success (handle exists)
+      // Only success and explicit handle-not-found are conclusive. Other
+      // protocol responses (including 200: handle exists but has no values)
+      // and malformed payloads do not prove that this DOI is invalid.
+      // https://www.handle.net/proxy_servlet.html
+      if (data.responseCode !== 1 && data.responseCode !== 100) return;
       const valid = data.responseCode === 1;
       results.set(doi, valid);
       updates.push([doi, { valid }]);

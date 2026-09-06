@@ -1,3 +1,4 @@
+import {activeWorkSignal, abortableDelay} from "./work-cancellation";
 import type {DoiString, DoiAugmentRequest, ReplicationResult, RetractionResponse} from "./types";
 import type {AugmentSource} from "./doi-augment";
 import type {NcbiIdType} from "./pmc-resolve";
@@ -276,6 +277,7 @@ export async function resolvePmcIdsViaWorker(
 /**
  * Ask the service worker to run augmentDOIs, routing all Crossref/OpenAlex
  * fetches through the extension background context (no CORS restrictions).
+ * Unanswered titles are omitted; an invalidated extension context throws so callers can offer reload.
  */
 export async function augmentDOIsViaWorker(
     inputs: Array<string | DoiAugmentRequest>
@@ -287,7 +289,8 @@ export async function augmentDOIsViaWorker(
         type: "FLORA_AUGMENT",
         requests,
     });
-    const unanswered = new Set(response?.unanswered ?? []);
+    if (!response) throw new Error("Extension context invalidated");
+    const unanswered = new Set(response.unanswered ?? []);
     const result = new Map<string, DoiString | null>();
     for (const [title, doi] of Object.entries(response?.results ?? {})) {
         if (unanswered.has(title)) {
@@ -333,7 +336,6 @@ export function isWorkerUnreachable(err: unknown): boolean {
 /** Back-off between attempts; the total wait stays under 5 s. */
 export const SEND_RETRY_DELAYS_MS = [300, 1000, 3000];
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
  * `chrome.runtime.sendMessage` wrapper that (1) retries when the worker was
@@ -342,16 +344,39 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * promise errors after an extension reload. All other errors still reject so
  * genuine failures stay visible.
  */
+const CANCELLABLE_TYPES = new Set([
+    "FLORA_LOOKUP", "FLORA_CREATE_SET", "FLORA_RET_CHECK", "FLORA_SHEET_FETCH",
+    "FLORA_AUGMENT", "FLORA_PMC_RESOLVE", "FLORA_OPENALEX_RESOLVE", "FLORA_S2_RESOLVE",
+]);
+
 export async function safeSendMessage<T = unknown>(message: unknown): Promise<T | undefined> {
-    for (let attempt = 0; ; attempt++) {
-        try {
-            return (await chrome.runtime.sendMessage(message)) as T;
-        } catch (err) {
-            if (isContextInvalidated(err)) return undefined;
-            const delay = SEND_RETRY_DELAYS_MS[attempt];
-            if (delay === undefined || !isWorkerUnreachable(err)) throw err;
-            await sleep(delay);
+    const record = message as {type?: string};
+    const signal = CANCELLABLE_TYPES.has(record?.type ?? "") ? activeWorkSignal() : undefined;
+    const requestId = signal ? Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-") : undefined;
+    const payload = requestId ? {...record, requestId} : message;
+    let rejectAbort: ((reason: unknown) => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const cancel = () => {
+        try { void chrome.runtime.sendMessage({type: "FLORA_CANCEL_REQUEST", requestId}).catch(() => {}); } catch {}
+        rejectAbort?.(signal?.reason);
+    };
+    signal?.throwIfAborted();
+    signal?.addEventListener("abort", cancel, {once: true});
+    try {
+        for (let attempt = 0; ; attempt++) {
+            signal?.throwIfAborted();
+            try {
+                return await Promise.race([chrome.runtime.sendMessage(payload) as Promise<T>, aborted]);
+            } catch (err) {
+                signal?.throwIfAborted();
+                if (isContextInvalidated(err)) return undefined;
+                const delay = SEND_RETRY_DELAYS_MS[attempt];
+                if (delay === undefined || !isWorkerUnreachable(err)) throw err;
+                await abortableDelay(delay, signal);
+            }
         }
+    } finally {
+        signal?.removeEventListener("abort", cancel);
     }
 }
 

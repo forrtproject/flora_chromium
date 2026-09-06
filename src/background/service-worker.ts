@@ -1,6 +1,9 @@
+import {SharedRequest} from "@shared/shared-request";
+import {cancelWorkerRequest, runWorkerRequest, fetchWithDeadline} from "@shared/work-cancellation";
 import {LocalCache, MONTH_MS} from "@shared/cache";
+import {installCacheBudget} from "@shared/cache-budget";
 import {createDoiSet, lookupDOIs} from "@shared/flora-api";
-import {RET_MAP_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
+import {RET_MAP_KEY, RET_BUDGET_EVICTED_SYNC_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
 import type {DoiString, ReplicationResult, RetractionResponse} from "@shared/types";
 import {LookupResponse, RetractionCheckResponse, SheetFetchResponse, AugmentResponse, AugmentRequest, PmcResolveResponse, OpenAlexResolveResponse, SemanticScholarResolveResponse, CreateSetResponse} from "@shared/messages";
 import {isLookupRequest, isRetractionCheckRequest, isSheetFetchRequest, isAugmentRequest, isPmcResolveRequest, isOpenAlexResolveRequest, isSemanticScholarResolveRequest, isDebugEntriesRequest, isStashReportRequest, isTakeReportRequest, isCreateSetRequest, type TakeReportResponse} from "@shared/messages";
@@ -8,11 +11,16 @@ import {augmentDOIsDetailed, type AugmentSource} from "@shared/doi-augment";
 import {resolvePmcIds, type NcbiIdType} from "@shared/pmc-resolve";
 import {resolveOpenAlexIds} from "@shared/openalex-resolve";
 import {resolveSemanticScholarIds} from "@shared/semanticscholar-resolve";
-import {getSettings, isSetupComplete} from "@shared/settings";
 import {appendDebugEntries, installDebugLogStore} from "@shared/debug-log";
 import {debugError, debugLog, debugWarn, isDebugEnabledAsync} from "@shared/debug";
 
-const cache = new LocalCache<ReplicationResult>("flora");
+// The worker-wide manager budgets all providers together.
+const cache = new LocalCache<ReplicationResult>("flora", 0);
+// A separate namespace keeps legacy, potentially permanent null entries ignored.
+// Both caches share the worker-wide provider budget through the flora: prefix.
+const noMatchCache = new LocalCache<never>("flora:no-match", 0);
+const NO_MATCH_TTL_MS = 5 * 60_000;
+installCacheBudget();
 
 // The worker owns the debug log: its own entries are stored directly, and
 // every other context ships batches here via FLORA_DEBUG_ENTRIES.
@@ -22,20 +30,8 @@ installDebugLogStore();
 // flag has been read — a top-level debugLog runs before that and is dropped.
 isDebugEnabledAsync().then(() => debugLog("Worker started")).catch(() => {});
 
-// Initialise cache quota from persisted settings (service worker may restart).
-getSettings().then(({ cacheQuotaMb }) => {
-    cache.setQuota(cacheQuotaMb === 0 ? 0 : cacheQuotaMb * 1024 * 1024);
-}).catch((err) => debugError("Cache quota: could not read settings —", err));
-
-// Keep quota in sync when the user changes the setting; drop the cached
-// retraction source whenever a fresh map is synced into local storage.
+// Drop the in-memory retraction source when its storage entry changes.
 chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "sync" && "flora_settings" in changes) {
-        const next = (changes["flora_settings"].newValue as { cacheQuotaMb?: number } | undefined);
-        if (next?.cacheQuotaMb != null) {
-            cache.setQuota(next.cacheQuotaMb === 0 ? 0 : next.cacheQuotaMb * 1024 * 1024);
-        }
-    }
     if (area === "local" && RET_MAP_KEY in changes) {
         retractionGeneration++;
         cachedRetractionSource = null;
@@ -93,10 +89,15 @@ ensureRetractionSyncAlarm().catch((err) => {
 
 
 /** In-flight dedup: prevents duplicate API calls for the same DOI */
-const inflight = new Map<DoiString, Promise<ReplicationResult | null>>();
+const inflight = new Map<DoiString, SharedRequest<{results: Map<DoiString, ReplicationResult>; errors: Record<string, string>}>>();
 
 chrome.runtime.onMessage.addListener(
     (message: unknown, sender, sendResponse) => {
+        if ((message as {type?: string} | null)?.type === "FLORA_CANCEL_REQUEST") {
+            cancelWorkerRequest(message, sender);
+            return false;
+        }
+        const run = <T>(task: (signal?: AbortSignal) => Promise<T>) => runWorkerRequest(message, sender, task);
         if (
             typeof message === "object" &&
             message !== null &&
@@ -131,7 +132,7 @@ chrome.runtime.onMessage.addListener(
 
         if (isLookupRequest(message)) {
             const dois = message.dois;
-            handleLookup(dois)
+            run(signal => handleLookup(dois, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -146,7 +147,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isCreateSetRequest(message)) {
-            createDoiSet(message.dois)
+            run(signal => createDoiSet(message.dois, signal))
                 .then((setId) =>
                     sendResponse({type: "FLORA_CREATE_SET_RESULT", setId} satisfies CreateSetResponse)
                 )
@@ -157,7 +158,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isRetractionCheckRequest(message)) {
-            handleRetractionCheck(message.dois)
+            run(signal => handleRetractionCheck(message.dois, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -206,7 +207,7 @@ chrome.runtime.onMessage.addListener(
             return true;
         }
         if (isSheetFetchRequest(message)) {
-            handleSheetFetch(message.spreadsheetId, message.gid)
+            run(signal => handleSheetFetch(message.spreadsheetId, message.gid, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -219,7 +220,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isAugmentRequest(message)) {
-            handleAugment(message.requests)
+            run(signal => handleAugment(message.requests, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -231,7 +232,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isPmcResolveRequest(message)) {
-            handlePmcResolve(message.pmcids, message.idtype)
+            run(signal => handlePmcResolve(message.pmcids, message.idtype, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -243,7 +244,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isOpenAlexResolveRequest(message)) {
-            handleOpenAlexResolve(message.ids)
+            run(signal => handleOpenAlexResolve(message.ids, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -255,7 +256,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isSemanticScholarResolveRequest(message)) {
-            handleSemanticScholarResolve(message.ids)
+            run(signal => handleSemanticScholarResolve(message.ids, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -313,21 +314,23 @@ async function takeReport(consume: boolean): Promise<string | null> {
     return expired ? null : pending.report;
 }
 
-async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
+async function handleLookup(dois: DoiString[], signal?: AbortSignal): Promise<LookupResponse> {
     const results: Record<string, ReplicationResult> = {};
     const errors: Record<string, string> = {};
     const toFetch: DoiString[] = [];
 
-    // Check cache and in-flight requests. We only persist matched results, so a
-    // truthy cache hit is a real result. A null entry (legacy negative cache) or
-    // a miss both fall through to re-query, so newly added FORRT data surfaces.
-    const cached = await cache.getMany(dois);
+    // Confirmed no-matches expire after five minutes; provider errors are never cached.
+    const [cached, noMatches] = await Promise.all([cache.getMany(dois), noMatchCache.getMany(dois)]);
     for (const doi of dois) {
         const hit = cached.get(doi);
         if (hit) {
             results[doi] = hit;
-        } else if (inflight.has(doi)) {
-            const r = await inflight.get(doi)!;
+        } else if (noMatches.has(doi)) {
+            continue;
+        } else if (inflight.has(doi) && !inflight.get(doi)!.aborted) {
+            const shared = await inflight.get(doi)!.subscribe(signal);
+            const r = shared.results.get(doi);
+            if (shared.errors[doi]) errors[doi] = shared.errors[doi];
             if (r) results[doi] = r;
         } else {
             toFetch.push(doi);
@@ -339,45 +342,46 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
     }
 
     // Batch API call for uncached DOIs
-    const batchPromise = lookupDOIs(toFetch);
-
-    // Register each DOI as in-flight (catch to prevent unhandled rejection —
-    // the main try/catch below handles the actual error reporting)
-    for (const doi of toFetch) {
-        inflight.set(
-            doi,
-            batchPromise.then((map) => map.get(doi) ?? null).catch(() => null)
-        );
-    }
+    signal?.throwIfAborted();
+    const batch = new SharedRequest(async (transportSignal: AbortSignal) => {
+        try {
+            const batchErrors: Record<string, string> = {};
+            const apiResults = await lookupDOIs(toFetch, batchErrors, transportSignal);
+            try {
+                const writes: Array<[string, ReplicationResult]> = [];
+                const misses: Array<[string, null]> = [];
+                for (const doi of toFetch) {
+                    const result = apiResults.get(doi);
+                    if (result) writes.push([doi, result]);
+                    else if (!Object.hasOwn(batchErrors, doi)) misses.push([doi, null]);
+                }
+                await cache.setMany(writes, MONTH_MS);
+                await noMatchCache.setMany(misses, NO_MATCH_TTL_MS);
+            } catch (err) {
+                debugWarn("Lookup: cache write failed —", err);
+            }
+            return {results: apiResults, errors: batchErrors};
+        } finally {
+            for (const doi of toFetch) if (inflight.get(doi) === batch) inflight.delete(doi);
+        }
+    });
+    for (const doi of toFetch) inflight.set(doi, batch);
 
     try {
-        const apiResults = await batchPromise;
+        const completed = await batch.subscribe(signal);
+        const apiResults = completed.results;
+        Object.assign(errors, completed.errors);
 
-        const writes: Array<[string, ReplicationResult]> = [];
         for (const doi of toFetch) {
-            const r = apiResults.get(doi);
-            if (r) {
-                results[doi] = r;
-                writes.push([doi, r]);
-            }
-            // No result (no record yet, or a transient batch failure): do NOT
-            // cache. We re-query every time so newly added FORRT data surfaces
-            // instead of being suppressed by a stale negative cache entry.
+            const result = apiResults.get(doi);
+            if (result) results[doi] = result;
         }
-        try {
-            await cache.setMany(writes, MONTH_MS);
-        } catch (err) {
-            debugWarn(`Lookup: cache write failed for ${writes.length} DOI(s) —`, err);
-        }
+
     } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
         debugError(`Lookup: FORRT API failed for ${toFetch.length} DOI(s) — ${msg}`, err);
         for (const doi of toFetch) {
             errors[doi] = msg;
-        }
-    } finally {
-        for (const doi of toFetch) {
-            inflight.delete(doi);
         }
     }
 
@@ -385,9 +389,9 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
 }
 
 async function handleAugment(
-    requests: AugmentRequest["requests"]
+    requests: AugmentRequest["requests"], signal?: AbortSignal
 ): Promise<AugmentResponse> {
-    const resultMap = await augmentDOIsDetailed(requests);
+    const resultMap = await augmentDOIsDetailed(requests, signal);
     const results: Record<string, string | null> = {};
     const sources: Record<string, AugmentSource | null> = {};
     const unanswered: string[] = [];
@@ -399,20 +403,20 @@ async function handleAugment(
     return { type: "FLORA_AUGMENT_RESULT", results, sources, unanswered };
 }
 
-async function handleOpenAlexResolve(ids: string[]): Promise<OpenAlexResolveResponse> {
+async function handleOpenAlexResolve(ids: string[], signal?: AbortSignal): Promise<OpenAlexResolveResponse> {
     const results: Record<string, string | null> = {};
-    for (const [id, doi] of await resolveOpenAlexIds(ids)) results[id] = doi;
+    for (const [id, doi] of await resolveOpenAlexIds(ids, signal)) results[id] = doi;
     return {type: "FLORA_OPENALEX_RESOLVE_RESULT", results};
 }
 
-async function handleSemanticScholarResolve(ids: string[]): Promise<SemanticScholarResolveResponse> {
+async function handleSemanticScholarResolve(ids: string[], signal?: AbortSignal): Promise<SemanticScholarResolveResponse> {
     const results: Record<string, string | null> = {};
-    for (const [id, doi] of await resolveSemanticScholarIds(ids)) results[id] = doi;
+    for (const [id, doi] of await resolveSemanticScholarIds(ids, signal)) results[id] = doi;
     return {type: "FLORA_S2_RESOLVE_RESULT", results};
 }
 
-async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid"): Promise<PmcResolveResponse> {
-    const resultMap = await resolvePmcIds(pmcids, idtype);
+async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid", signal?: AbortSignal): Promise<PmcResolveResponse> {
+    const resultMap = await resolvePmcIds(pmcids, idtype, signal);
     const results: Record<string, string | null> = {};
     for (const [pmcid, doi] of resultMap) results[pmcid] = doi ?? null;
     return {type: "FLORA_PMC_RESOLVE_RESULT", results};
@@ -420,17 +424,22 @@ async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid"):
 
 async function handleSheetFetch(
     spreadsheetId: string,
-    gid: string
+    gid: string, signal?: AbortSignal
 ): Promise<SheetFetchResponse> {
     const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
     try {
-        const resp = await fetch(url, {credentials: "include"});
+        const resp = await fetchWithDeadline(url, {credentials: "include", signal});
         if (!resp.ok) {
             return {
                 type: "FLORA_SHEET_FETCH_RESULT",
                 csv: null,
                 error: `HTTP ${resp.status}`
             };
+        }
+        // Access failures can redirect to a sign-in/error document with HTTP 200.
+        // Inspect its media type rather than rejecting legitimate HTML-looking CSV cells.
+        if (resp.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() === "text/html") {
+            return {type: "FLORA_SHEET_FETCH_RESULT", csv: null, error: "Sheet export returned a sign-in or error page"};
         }
         const csv = await resp.text();
         return {type: "FLORA_SHEET_FETCH_RESULT", csv, error: null};
@@ -483,50 +492,60 @@ let retractionGeneration = 0;
 
 // The bundled fallback is fetched lazily (not statically imported) so it stays
 // out of the worker bundle until the very first install before any sync.
-let bundledRetractionMapPromise: Promise<RetractionMaps> | null = null;
+let bundledRetractionLoad: SharedRequest<RetractionMaps> | null = null;
 
-async function loadBundledRetractionMap(): Promise<RetractionMaps> {
-    if (!bundledRetractionMapPromise) {
-        bundledRetractionMapPromise = (async () => {
-            const response = await fetch(chrome.runtime.getURL("dist/retractions.json"));
-            if (!response.ok) {
-                throw new Error(`Failed to load bundled retractions: ${response.status}`);
+function loadBundledRetractionMap(signal?: AbortSignal): Promise<RetractionMaps> {
+    signal?.throwIfAborted();
+    if (!bundledRetractionLoad || bundledRetractionLoad.aborted) {
+        const load: SharedRequest<RetractionMaps> = new SharedRequest(async transportSignal => {
+            try {
+                const response = await fetchWithDeadline(chrome.runtime.getURL("dist/retractions.json"), {signal: transportSignal});
+                if (!response.ok) throw new Error(`Failed to load bundled retractions: ${response.status}`);
+                const data = await response.json() as RetractionMaps;
+                transportSignal.throwIfAborted();
+                return normaliseRetractionMaps(data);
+            } catch (error) {
+                if (bundledRetractionLoad === load) bundledRetractionLoad = null;
+                if (!transportSignal.aborted) debugError("Retractions: bundled fallback map failed to load —", error);
+                throw error;
             }
-            const data = await response.json() as RetractionMaps;
-            return normaliseRetractionMaps(data);
-        })();
+        });
+        bundledRetractionLoad = load;
     }
-    try {
-        return await bundledRetractionMapPromise;
-    } catch (error) {
-        debugError("Retractions: bundled fallback map failed to load —", error);
-        bundledRetractionMapPromise = null; // allow a retry on the next call
-        throw error;
-    }
+    return bundledRetractionLoad.subscribe(signal);
 }
 
 // Shared across checks that arrive while the first load is still running. The
 // worker is killed after ~30s idle, so every wake reloads: reading the 3.5MB
 // blob and rebuilding both maps per concurrent check cost seconds on a page
 // that asks about its DOIs one at a time.
-let retractionSourceLoad: Promise<RetractionMaps> | null = null;
+let retractionSourceLoad: SharedRequest<RetractionMaps> | null = null;
 
-function getRetractionSource(): Promise<RetractionMaps> {
+function getRetractionSource(signal?: AbortSignal): Promise<RetractionMaps> {
+    signal?.throwIfAborted();
     if (cachedRetractionSource) return Promise.resolve(cachedRetractionSource);
-    if (!retractionSourceLoad) {
-        const load: Promise<RetractionMaps> = loadRetractionSource().finally(() => {
+    if (!retractionSourceLoad || retractionSourceLoad.aborted) {
+        const load: SharedRequest<RetractionMaps> = new SharedRequest(transportSignal => loadRetractionSource(transportSignal).finally(() => {
             if (retractionSourceLoad === load) retractionSourceLoad = null;
-        });
+        }));
         retractionSourceLoad = load;
     }
-    return retractionSourceLoad;
+    return retractionSourceLoad.subscribe(signal);
 }
 
-async function loadRetractionSource(): Promise<RetractionMaps> {
+async function loadRetractionSource(signal: AbortSignal): Promise<RetractionMaps> {
+    signal.throwIfAborted();
     const generation = retractionGeneration;
     const started = performance.now();
-    const storageResult = await chrome.storage.local.get([RET_MAP_KEY]);
-    const stored = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
+    let stored: RetractionMaps | undefined;
+    try {
+        const storageResult = await chrome.storage.local.get([RET_MAP_KEY]);
+        stored = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
+    } catch (error) {
+        signal.throwIfAborted();
+        debugWarn("Retractions: storage unavailable — using bundled data", error);
+    }
+    signal.throwIfAborted();
     const hasStoredData = !!stored && (
         Object.keys(stored.retractions || {}).length > 0 ||
         Object.keys(stored.concerns || {}).length > 0
@@ -539,20 +558,22 @@ async function loadRetractionSource(): Promise<RetractionMaps> {
         return source;
     }
 
-    // Nothing synced yet: kick off a sync for next time and answer from the
-    // bundled JSON now. Don't cache the fallback — onChanged will pick up the
-    // synced map, but until then we re-read so an in-flight sync is noticed.
-    debugLog("Retractions: nothing synced yet — answering from the bundled map and starting a sync");
+    // The synced map may be absent on first use or after budget eviction.
+    // Answer from the bundled JSON and check whether refresh is due. Don't
+    // cache this source choice, so a newly synced map is noticed on next check.
+    debugLog("Retractions: no stored map — answering from the bundled map and checking refresh schedule");
     syncRetractionsInfo().catch((err) => debugError("Retractions: sync failed —", err));
-    return loadBundledRetractionMap();
+    return loadBundledRetractionMap(signal);
 }
 
-async function handleRetractionCheck(dois: DoiString[]): Promise<RetractionCheckResponse> {
+async function handleRetractionCheck(dois: DoiString[], signal?: AbortSignal): Promise<RetractionCheckResponse> {
     const started = performance.now();
     let source: RetractionMaps;
     try {
-        source = await getRetractionSource();
+        source = await getRetractionSource(signal);
+        signal?.throwIfAborted();
     } catch (err) {
+        signal?.throwIfAborted();
         debugError(`Retractions: no source available, ${dois.length} DOI(s) unchecked —`, err);
         return {type: "FLORA_RET_CHECK_RESULT", results: [], error: "Retraction data unavailable"};
     }
@@ -587,17 +608,18 @@ export function syncRetractionsInfo(): Promise<void> {
 async function runRetractionSync(): Promise<void> {
     const minInterval = 1000 * 60 * 60 * 24 * 7; // weekly
     const currentTime = Date.now();
-    const previous = await chrome.storage.local.get(["synctime"]) ?? 0;
+    // One snapshot keeps the map and its eviction metadata consistent.
+    const previous = await chrome.storage.local.get(["synctime", RET_BUDGET_EVICTED_SYNC_KEY, RET_MAP_KEY]);
     const lastSync = previous.synctime || 0;
     const nextUpdate = lastSync + minInterval;
-    const storageResult = await chrome.storage.local.get(RET_MAP_KEY);
-    const map = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
+    const map = previous[RET_MAP_KEY] as RetractionMaps | undefined;
     const isEmpty = !map || (
         Object.keys(map.retractions || {}).length === 0 &&
         Object.keys(map.concerns || {}).length === 0
     );
-    if (isEmpty || currentTime > nextUpdate) {
-        const synced = await storageSync();
-        if (synced) await chrome.storage.local.set({synctime: currentTime});
+    const deliberatelyEvicted = map === undefined && Number.isFinite(lastSync) && lastSync > 0 &&
+        previous[RET_BUDGET_EVICTED_SYNC_KEY] === lastSync;
+    if ((isEmpty && !deliberatelyEvicted) || currentTime > nextUpdate) {
+        await storageSync();
     }
 }

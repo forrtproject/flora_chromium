@@ -3,15 +3,16 @@
 import { debugError } from "./debug";
 
 export interface FloraSettings {
-  /** Contact email for Crossref/OpenAlex polite pool (required). */
+  /** Optional API contact email for Crossref, OpenAlex, Unpaywall and NCBI.
+   * Title matching and Unpaywall lookups require a nonempty value. */
   email: string;
   /** Citation format id used by the pill's Copy citation row (see citation.ts). */
   citationStyle: string;
   /**
-   * Soft cap on chrome.storage.local usage in MB. 0 = unlimited. With the
+   * Shared soft cap on disposable provider caches in MB. 0 = unlimited. With the
    * "unlimitedStorage" permission the browser lifts the ~10 MB hard cap, so
-   * this is a housekeeping bound: when it's approached, expired cache entries
-   * are evicted first, then live entries oldest-first (LRU).
+   * this is a housekeeping bound: provider data is evicted in batches by write age. Settings and
+   * diagnostic logs are excluded; blobs are evicted as a unit.
    */
   cacheQuotaMb: number;
   /**
