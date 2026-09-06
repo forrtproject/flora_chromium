@@ -51,6 +51,7 @@ let searchHidden = false;
 
 export function setSearchHidden(hidden: boolean): void {
     searchHidden = hidden;
+    if (!hidden) refreshBadges();
 }
 
 export function isSearchHidden(): boolean {
@@ -290,7 +291,10 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
 
     try {
         const response = await safeSendMessage<LookupResponse>(request);
-        if (!response) return; // extension reloaded underneath this page — stop quietly
+        if (!response) {
+            for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "Extension unavailable"});
+            return;
+        }
         debugLog(`${label}: Lookup response:`, Object.keys(response.results).length, "results,", Object.keys(response.errors).length, "errors");
 
         let badgedCount = 0;
@@ -314,13 +318,18 @@ async function runPass(adapter: SearchSiteAdapter, rows: NodeListOf<HTMLElement>
         if (searchHidden || isWorkCancelled()) return;
 
         reportWorkStage("report", `Marking up ${count(badgedCount, "result")}…`);
-        refreshBadges();
         debugLog(`${label}: Rendered`, badgedCount, "badge(s)");
     } catch (err) {
-        if (searchHidden || isWorkCancelled()) return;
         for (const doi of uniqueDois) lookupState.set(doi, {status: "error", message: "FORRT unavailable"});
-        refreshBadges();
-        debugLog(`${label}: Lookup failed:`, err);
+        if (!isWorkCancelled()) debugLog(`${label}: Lookup failed:`, err);
+    } finally {
+        if (isWorkCancelled()) {
+            for (const doi of uniqueDois) lookupState.delete(doi);
+            for (const {row} of resolved) {
+                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                row.removeAttribute(PROCESSED_ATTR);
+            }
+        } else if (!searchHidden) refreshBadges();
     }
 }
 
