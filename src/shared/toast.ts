@@ -13,12 +13,13 @@ import {WORK_TOAST_ID} from "./progress-toast";
 const TOAST_ID = "flora-action-toast";
 const ALERT_TOAST_ID = "flora-alert-toast";
 
-export type ToastTone = "success" | "error" | "pending";
+export type ToastTone = "success" | "error" | "pending" | "info";
 
 const TONE_BACKGROUND: Record<ToastTone, string> = {
     success: "linear-gradient(135deg,#853953,#612D53)",
     error: "linear-gradient(135deg,#b3261e,#8c1d18)",
     pending: "linear-gradient(135deg,#853953,#612D53)",
+    info: "#f1f5f9",
 };
 
 const CHECK_SVG =
@@ -32,6 +33,11 @@ const ALERT_SVG =
     `1.75 0 0 1-1.543-2.575Zm-.061 8.201a.75.75 0 0 1 .75-.75h1.708a.75.75 0 0 1 0 1.5H7.146a.75.75 0 0 1 ` +
     `-.75-.75Zm.75-5.248a.75.75 0 0 1 1.5 0v3a.75.75 0 0 1-1.5 0Z"></path>` +
     `<circle cx="8" cy="12" r="1"></circle></svg>`;
+
+const INFO_SVG =
+    `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="display:block;flex-shrink:0;">` +
+    `<circle cx="8" cy="8" r="6.25"/><path d="M8 7v4" stroke-linecap="round"/>` +
+    `<circle cx="8" cy="4.75" r=".75" fill="currentColor" stroke="none"/></svg>`;
 
 const SPIN_KEYFRAMES = "@keyframes flora-toast-spin{to{transform:rotate(360deg)}}";
 
@@ -96,7 +102,10 @@ function ensureToast(id: string): HTMLElement {
     host.setAttribute("aria-live", "polite");
 
     const style = document.createElement("style");
-    style.textContent = SPIN_KEYFRAMES;
+    style.textContent = SPIN_KEYFRAMES +
+        "#flora-action-toast[data-flora-tone=info] button:focus-visible," +
+        "#flora-alert-toast[data-flora-tone=info] button:focus-visible" +
+        "{outline:2px solid #64748b;outline-offset:2px;}";
     host.appendChild(style);
 
     document.body.appendChild(host);
@@ -113,7 +122,7 @@ function iconFor(tone: ToastTone): HTMLElement {
         return icon;
     }
     icon.style.cssText = "display:flex;align-items:center;line-height:0;flex-shrink:0;";
-    icon.innerHTML = tone === "success" ? CHECK_SVG : ALERT_SVG;
+    icon.innerHTML = tone === "success" ? CHECK_SVG : tone === "info" ? INFO_SVG : ALERT_SVG;
     return icon;
 }
 
@@ -143,6 +152,7 @@ export function showToast(message: string, options: ToastOptions = {}): HTMLElem
 
     if (!action) clearTimers();
     const host = ensureToast(hostId(action));
+    host.setAttribute("data-flora-tone", tone);
 
     // Keep the <style> child (the spinner keyframes) and rebuild the content.
     for (const child of [...host.children]) {
@@ -152,10 +162,11 @@ export function showToast(message: string, options: ToastOptions = {}): HTMLElem
     host.style.cssText =
         `position:fixed;bottom:${bottomOffset()};right:18px;z-index:2147483647;` +
         `display:flex;align-items:center;gap:8px;pointer-events:${action ? "auto" : "none"};` +
-        `background:${TONE_BACKGROUND[tone]};color:#fff;` +
+        `background:${TONE_BACKGROUND[tone]};color:${tone === "info" ? "#334155" : "#fff"};` +
+        (tone === "info" ? "border:1px solid #cbd5e1;" : "") +
         "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;" +
         "font-size:12px;font-weight:500;line-height:1.4;padding:8px 12px;border-radius:8px;" +
-        "max-width:280px;box-shadow:0 4px 16px rgba(0,0,0,0.18);" +
+        `max-width:280px;box-shadow:${tone === "info" ? "0 2px 8px rgba(15,23,42,0.10)" : "0 4px 16px rgba(0,0,0,0.18)"};` +
         "opacity:0;transform:translateY(6px);transition:opacity 0.18s ease,transform 0.18s ease;";
 
     host.appendChild(iconFor(tone));
@@ -168,7 +179,7 @@ export function showToast(message: string, options: ToastOptions = {}): HTMLElem
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = action.label;
-        button.style.cssText = ACTION_STYLE;
+        button.style.cssText = ACTION_STYLE + (tone === "info" ? "color:#334155;background:#fff;border-color:#94a3b8;" : "");
         button.addEventListener("click", () => {
             void action.onClick();
             if (options.dismissOnAction !== false) dismissAlertToast();
@@ -180,7 +191,7 @@ export function showToast(message: string, options: ToastOptions = {}): HTMLElem
         close.textContent = "\u00d7";
         close.title = "Dismiss";
         close.setAttribute("aria-label", "Dismiss");
-        close.style.cssText = CLOSE_STYLE;
+        close.style.cssText = CLOSE_STYLE + (tone === "info" ? "color:#64748b;" : "");
         close.addEventListener("click", () => dismissAlertToast());
         host.appendChild(close);
     }

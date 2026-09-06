@@ -266,8 +266,8 @@ async function checkPageRetractions(dois: DoiString[]): Promise<RetractionRespon
             return [];
         }
         debugWarn("Retraction checks unavailable —", error);
-        retractionRetryToast = showToast("Retraction checks unavailable. Other results are still shown.", {
-            tone: "error", duration: 0, dismissOnAction: false,
+        retractionRetryToast = showToast("ORE: Retraction checks unavailable. Other results are still shown.", {
+            tone: "info", duration: 0, dismissOnAction: false,
             action: {label: "Retry", onClick: async () => {
                 if (floraHidden || navigated()) { dismissRetractionRetry(); return; }
                 if (retractionRetryQueued?.page === passUrl && retractionRetryQueued.generation === checkedPageGeneration && retractionRetryQueued.sheetGeneration === generation) return;
