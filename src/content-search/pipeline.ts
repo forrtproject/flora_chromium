@@ -18,10 +18,11 @@ import {applyPlacement} from "@shared/site-adapters";
 import {showToast} from "@shared/toast";
 import {isSetupComplete} from "@shared/settings";
 import {fetchOpenAccess} from "@shared/openaccess";
-import {activeWorkSignal, beginCancellableWork, canStartAutomaticWork, resumeAutomaticWork, workSignal} from "@shared/work-cancellation";
+import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork, workSignal} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
+    waitForWorkToFinish,
     count,
     endWorkIndicator,
     isWorkCancelled,
@@ -488,11 +489,11 @@ async function retryFailedSearchChecks(adapter: SearchSiteAdapter, root: ParentN
     const wasCancelled = clickedSignal.aborted;
     try {
         await passQueue;
+        await waitForWorkToFinish();
         if (searchHidden || location.href !== pageUrl || (!wasCancelled && clickedSignal.aborted)) return;
         // New panels run their own notice checks; retry only failures already known at the click.
         const failedNotices = retractionPage === pageUrl ? [...unavailableRetractionDois] : [];
         resumeAutomaticWork();
-        beginCancellableWork();
         beginWorkIndicator({stages: ["augment", "notices"]});
         try {
             await retryUnansweredSearchResults(adapter, root);

@@ -1,4 +1,5 @@
-import {activeWorkSignal, beginCancellableWork} from "@shared/work-cancellation";
+import {activeWorkSignal} from "@shared/work-cancellation";
+import {waitForWorkToFinish} from "@shared/progress-toast";
 import {
     beginDomScanPass,
     classifyPageDois,
@@ -63,6 +64,7 @@ let pageNotices: RetractionResponse[] = [];
 const refNotices = new Map<DoiString, RetractionResponse>();
 const unavailableRetractionDois = new Set<DoiString>();
 let retractionRetryToast: HTMLElement | null = null;
+let retractionRetryQueued = false;
 function dismissRetractionRetry(): void {
     // Other provider alerts reuse this host; do not dismiss their newer message.
     if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
@@ -260,8 +262,14 @@ async function checkPageRetractions(dois: DoiString[]): Promise<RetractionRespon
             tone: "error", duration: 0,
             action: {label: "Retry", onClick: async () => {
                 if (floraHidden || location.href !== passUrl || generation !== sheetFetchGen) { dismissRetractionRetry(); return; }
+                if (retractionRetryQueued) return;
+                const queuedSignal = activeWorkSignal();
+                const wasCancelled = queuedSignal?.aborted;
+                retractionRetryQueued = true;
+                try { await waitForWorkToFinish(); }
+                finally { retractionRetryQueued = false; }
+                if (floraHidden || location.href !== passUrl || generation !== sheetFetchGen || (!wasCancelled && queuedSignal?.aborted)) return;
                 resumeAutomaticWork();
-                beginCancellableWork();
                 beginWorkIndicator({stages: ["notices"]});
                 try {
                     const recovered = await checkPageRetractions([...unavailableRetractionDois]);

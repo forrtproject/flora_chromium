@@ -139,15 +139,18 @@ it("keeps rows usable when notices fail and retries the failed check without rep
     expect(document.querySelector("[data-flora-panel]")).not.toBeNull();
     const retry = document.querySelector<HTMLButtonElement>("#flora-alert-toast button")!;
     expect(retry.textContent).toBe("Retry");
-    const {beginWorkIndicator, endWorkIndicator} = await import("../../src/shared/progress-toast");
-    const {cancelWork} = await import("../../src/shared/work-cancellation");
+    const {beginWorkIndicator, endWorkIndicator, isWorkCancelled} = await import("../../src/shared/progress-toast");
     beginWorkIndicator(); // An older pass has not unwound its last work item yet.
-    cancelWork();
+    await vi.waitFor(() => expect(document.querySelector("[data-flora-work-cancel]")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>("[data-flora-work-cancel]")!.click();
     retry.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(retraction).toHaveBeenCalledTimes(1);
+    expect(isWorkCancelled()).toBe(true); // The older cancelled pass must not be resumed.
+    endWorkIndicator();
     await vi.waitFor(() => expect(badges.mock.lastCall![2]).toEqual([notice]));
     expect(retraction).toHaveBeenCalledTimes(2);
     expect(send).toHaveBeenCalledTimes(1);
-    endWorkIndicator();
 });
 
 it("does not offer Retry for a cancelled notice check", async () => {

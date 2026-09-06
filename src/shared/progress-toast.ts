@@ -144,6 +144,7 @@ interface StageRecord {
 }
 
 let refCount = 0;
+const idleWaiters = new Set<() => void>();
 let showTimer: ReturnType<typeof setTimeout> | null = null;
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let removeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -772,12 +773,19 @@ export function isWorkCancelled(): boolean {
     return cancelled || workSignal().aborted;
 }
 
+/** Wait for the current pass and its detached work to unwind before an explicit retry. */
+export function waitForWorkToFinish(): Promise<void> {
+    return refCount === 0 ? Promise.resolve() : new Promise(resolve => idleWaiters.add(resolve));
+}
+
 /** Hide the toast once all outstanding work has finished. */
 export function endWorkIndicator(): void {
     if (refCount === 0) return; // unmatched end — nothing to close
     refCount--;
     if (refCount > 0) return;
     endCancellableWork();
+    for (const resolve of idleWaiters) resolve();
+    idleWaiters.clear();
 
     const ending = currentStage ? stages.find((entry) => entry.stage === currentStage) : undefined;
     if (ending && ending.startedAt !== undefined && ending.endedAt === undefined) {
