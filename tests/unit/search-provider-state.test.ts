@@ -8,12 +8,17 @@ const send = vi.fn();
 const badges = vi.fn();
 const retraction = vi.fn();
 let navigationEvents: EventTarget;
+const NativeMutationObserver = MutationObserver;
+const observers: MutationObserver[] = [];
 const adapter: SearchSiteAdapter = {
     id: "test", label: "Test", hostnames: [], css: "", resultRow: ".result", panelPlacement: [],
     extractRow: () => ({doi: DOI, confident: true, title: "Paper", firstAuthor: null, year: null, sourceUrl: null}),
 };
 beforeEach(() => {
     vi.resetModules();
+    vi.stubGlobal("MutationObserver", class extends NativeMutationObserver {
+        constructor(callback: MutationCallback) { super(callback); observers.push(this); }
+    });
     document.body.innerHTML = '<div class="result"></div>';
     navigationEvents = new EventTarget();
     vi.stubGlobal("navigation", navigationEvents);
@@ -30,7 +35,10 @@ beforeEach(() => {
     }));
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+    for (const observer of observers.splice(0)) observer.disconnect();
+    vi.unstubAllGlobals();
+});
 
 it("retains a failed hidden lookup and refreshes its unavailable state when shown", async () => {
     let reject!: (reason: Error) => void;
