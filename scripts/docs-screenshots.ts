@@ -79,7 +79,7 @@ async function main(): Promise<void> {
 
   const browser = await puppeteer.launch({
     executablePath: await ensureChrome(),
-    headless: false, // Matches the visual harness; headless rasterises differently.
+    headless: true, // Chrome for Testing matches the headless visual harness.
     args: ["--force-color-profile=srgb", "--hide-scrollbars", "--force-device-scale-factor=2"],
   });
 

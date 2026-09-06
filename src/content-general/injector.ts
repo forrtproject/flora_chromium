@@ -122,7 +122,7 @@ export async function renderSetupPrompt(): Promise<void> {
     ">
       <div style="background:linear-gradient(135deg,#853953,#612D53);padding:10px 14px;display:flex;align-items:center;gap:8px;">
         <span style="color:#fff;font-weight:700;font-size:13px;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:5px;">FORRT ORE</span>
-        <span style="color:#fff;font-size:12px;font-weight:500;flex:1;">Setup Required</span>
+        <span style="color:#fff;font-size:12px;font-weight:500;flex:1;">Optional email setup</span>
         <span class="flora-setup-close" role="button" tabindex="0" aria-label="Close" style="
           cursor:pointer;color:rgba(255,255,255,0.7);font-size:18px;line-height:1;
           width:24px;height:24px;display:flex;align-items:center;justify-content:center;
@@ -131,7 +131,8 @@ export async function renderSetupPrompt(): Promise<void> {
       </div>
       <div style="padding:12px 14px;">
         <p style="margin:0 0 6px;font-size:13px;color:#3c4043;line-height:1.45;">
-          Add your email for faster API access to Crossref &amp; OpenAlex DOI resolution.
+          Add an email to enable title matching and open-access lookups.
+          Replication, retraction and PubPeer checks already work without it.
         </p>
         <button class="flora-setup-open" style="
           all:unset;cursor:pointer;display:block;width:100%;text-align:center;
