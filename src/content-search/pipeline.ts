@@ -16,6 +16,8 @@ import type {LookupRequest, LookupResponse} from "@shared/messages";
 import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator-pill";
 import {applyPlacement} from "@shared/site-adapters";
 import {fetchOpenAccess} from "@shared/openaccess";
+import {canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
     count,
@@ -51,6 +53,7 @@ let searchHidden = false;
 
 export function setSearchHidden(hidden: boolean): void {
     searchHidden = hidden;
+    if (!hidden) resumeAutomaticWork();
 }
 
 export function isSearchHidden(): boolean {
@@ -62,12 +65,24 @@ export function isSearchHidden(): boolean {
 // instead; each one reads the page when its turn comes, so it picks up every
 // row the earlier passes left unprocessed.
 let passQueue: Promise<void> = Promise.resolve();
+const pendingPasses = new Map<SearchSiteAdapter, Map<ParentNode, Promise<void>>>();
 
 /** Process every not-yet-processed row under `root`, holding one work
  *  indicator across the batch — extraction through to badges. Passes run one
  *  at a time, in call order. */
 export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    const next = passQueue.then(() => runQueuedPass(adapter, root));
+    if (!canStartAutomaticWork()) return Promise.resolve();
+    let pending = pendingPasses.get(adapter);
+    if (!pending) pendingPasses.set(adapter, pending = new Map());
+    const existing = pending.get(root);
+    if (existing) return existing;
+    const next = passQueue.then(async () => {
+        await waitUntilVisible();
+        pending!.delete(root);
+        if (pending!.size === 0) pendingPasses.delete(adapter);
+        await runQueuedPass(adapter, root);
+    });
+    pending.set(root, next);
     // Keep the queue itself clean: a rejected pass is reported to its own
     // caller, and must not fail every pass scheduled after it.
     passQueue = next.catch(() => {});
@@ -75,7 +90,7 @@ export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNod
 }
 
 async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Promise<void> {
-    if (searchHidden) {
+    if (searchHidden || !canStartAutomaticWork()) {
         debugLog(`${adapter.label}: paused on this site — skipping the pass`);
         return;
     }
@@ -87,6 +102,10 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
     try {
         await runPass(adapter, rows);
     } finally {
+        if (isWorkCancelled()) {
+            // Rows interrupted before a panel exists can be tried after an explicit resume.
+            for (const row of rows) if (!row.querySelector("[data-flora-panel]")) row.removeAttribute(PROCESSED_ATTR);
+        }
         endWorkIndicator();
     }
 }

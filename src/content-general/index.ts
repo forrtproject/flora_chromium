@@ -48,6 +48,8 @@ import {applyPillStyle, applyPlacement, currentSiteAdapter} from "@shared/site-a
 import {fetchOpenAccess} from "@shared/openaccess";
 import {showToast} from "@shared/toast";
 import {resolveReferenceDois, renderResolvedReferences, releaseReferenceEntries, resetReferenceMarkers, type ResolvedReference} from "./references";
+import {canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {waitUntilVisible} from "@shared/page-visibility";
 import {SeenDois} from "./seen-dois";
 import {serializeWithRerun} from "./serial-scan";
 import {startDomListener} from "./dom-listener";
@@ -115,7 +117,9 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         sendResponse({ok: true});
     } else if (type === "FLORA_SHOW_UI") {
         floraHidden = false;
+        resumeAutomaticWork();
         showAllFloraUI();
+        void scanWholePage().catch((err) => debugError("General: resumed pass failed —", err));
         reportActiveState(true);
         sendResponse({ok: true});
     } else if (type === "FLORA_GET_STATE") {
@@ -133,6 +137,7 @@ document.addEventListener("flora-pause-site", () => {
 });
 
 async function primaryDoiFastPath(): Promise<void> {
+    if (floraHidden || !canStartAutomaticWork()) return;
     const primary = extractPrimaryDOI(document);
     if (!primary) return;
 
@@ -192,18 +197,21 @@ function whenIdle(fn: () => void, timeout = 1000): void {
     }
 }
 
-const runScanPasses = serializeWithRerun(() => runScanPass());
-
-/** Holds one work indicator across the pass so the bar doesn't restart mid-pipeline. */
-async function scanWholePage(): Promise<void> {
-    // "augment" comes from references.ts, which resolves DOI-less references
-    // inside this pass.
+// Coalesce repeated mutation callbacks, including while the tab is in the background.
+const runScanPasses = serializeWithRerun(async () => {
+    await waitUntilVisible();
+    if (floraHidden || !canStartAutomaticWork()) return;
     beginWorkIndicator({stages: ["scan", "validate", "augment", "notices", "lookup", "report"]});
     try {
-        await runScanPasses();
+        await runScanPass();
     } finally {
         endWorkIndicator();
     }
+});
+
+async function scanWholePage(): Promise<void> {
+    if (floraHidden || !canStartAutomaticWork()) return;
+    await runScanPasses();
 }
 
 let nothingToFlagReportedFor: string | null = null;
@@ -216,6 +224,7 @@ function reportNothingToFlag(examined: number, flagged: boolean): void {
 }
 
 async function runScanPass(): Promise<void> {
+    if (floraHidden || !canStartAutomaticWork()) return;
     // Detect full URL change (SPA navigation) — clear state
     const currentUrl = location.href;
     if (currentUrl !== lastUrl) {
