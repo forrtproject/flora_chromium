@@ -1,0 +1,53 @@
+name: Attach visual evidence
+on:
+  workflow_run:
+    workflows: [Visual evidence, Visual review event]
+    types: [completed]
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+  statuses: write
+concurrency:
+  group: visual-publish-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+jobs:
+  describe:
+    if: contains(fromJSON('["pull_request", "pull_request_review"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-24.04
+    steps:
+      # Never execute PR code in this privileged workflow.
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        id: capture
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const {owner, repo} = context.repo;
+            const prs = await github.paginate(github.rest.pulls.list, {owner, repo, state: 'open'});
+            const pr = prs.find(p => p.head.sha === run.head_sha && p.head.repo?.full_name === run.head_repository.full_name);
+            if (!pr) return;
+            const runs = await github.rest.actions.listWorkflowRuns({owner, repo, workflow_id: 'visual.yml', event: 'pull_request', head_sha: pr.head.sha, per_page: 100});
+            const capture = runs.data.workflow_runs.find(r => r.head_repository.full_name === pr.head.repo.full_name);
+            if (!capture || capture.status !== 'completed') return;
+            core.setOutput('run-id', String(capture.id));
+            core.setOutput('pr', String(pr.number));
+      - uses: actions/download-artifact@v4
+        if: steps.capture.outputs.run-id
+        continue-on-error: true
+        with:
+          name: visual-report
+          path: visual-report
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.capture.outputs.run-id }}
+      - uses: actions/github-script@v7
+        if: steps.capture.outputs.run-id
+        env:
+          VISUAL_RUN_ID: ${{ steps.capture.outputs.run-id }}
+          VISUAL_PR: ${{ steps.capture.outputs.pr }}
+        with:
+          script: |
+            const publish = require('./.github/scripts/visual-publish.cjs');
+            await publish({github, context});

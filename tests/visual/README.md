@@ -22,7 +22,7 @@ npm run test:visual        # compare against baselines; exits 1 on any diff
 npm run test:visual:update # regenerate baselines (after an intentional UI change)
 ```
 
-On first run the harness auto-installs Chrome for Testing into the default
+On first run the harness auto-installs its pinned Chrome for Testing version into the default
 puppeteer cache (`~/.cache/puppeteer`, **outside the repo**). Nothing is written
 into the working tree except baselines (on update) and `output/` (on failure).
 
@@ -123,8 +123,9 @@ insurance against a stray install-time sync.
   fonts/images/scripts; `document.fonts.ready` is awaited before capture.
 - After navigation the harness polls the injected FLoRA selectors
   (`.flora-indicator-pill, .flora-notice-pill, #flora-pubpeer-panel`)
-  until their count is stable for 700 ms, then waits a short settle before
-  capturing.
+  until their contents and geometry are stable for 700 ms, at least one
+  element exists, and the work toast is gone, then waits a short settle.
+  Failure to reach this state within 12 seconds fails the fixture.
 
 Stability bar: after regenerating baselines, `npm run test:visual` must report
 **0 px difference on every fixture across five consecutive runs** before the
@@ -148,3 +149,62 @@ run (`npm run test:visual:update`) and commit them from that platform.
 When a FLoRA UI change is intentional, run `npm run test:visual:update`,
 **visually inspect** the regenerated PNGs in `baselines/`, and commit them
 alongside the code change so the diff is reviewable.
+
+## PR evidence and visual sign-off
+
+`Visual evidence` builds the PR base and head on the same Ubuntu runner and
+renders both with the PR's fixture catalogue and pinned Chrome 152.0.7977.75.
+Committed macOS baselines do not determine CI results. Changes to committed
+baseline PNGs cannot hide a change between the actual base and head builds.
+Both link-only and text-only DOI fixtures now contain real reference layouts;
+the old minimal unit fixtures produced no visible extension UI.
+
+The capture waits for nonempty extension UI, stable contents and geometry,
+and removal of the work toast. A timeout is a failure, including in update
+mode. This is a readiness guard, not a claim that every async interaction is
+covered. Popovers, keyboard interaction, popup/options, search-site layouts,
+and narrow viewports still need additional visual scenarios.
+
+CI stores all before/after PNGs, changed-pixel diff images (when dimensions
+match), JSON results, and a self-contained `index.html` in the `visual-report`
+artifact. Download and extract the artifact, then open `index.html`. Reports
+expire after 30 days; rerun capture if the evidence has expired.
+
+A separate trusted `workflow_run` job updates a marked section of the PR body
+with the commit, changed fixtures, report link, and approval status. GitHub
+artifact images cannot be embedded directly in Markdown; the report provides
+the image comparison without publishing screenshots to another service.
+The privileged job executes only default-branch code and parses artifact JSON
+as data. It also checks the PR head SHA and repository so stale runs cannot
+approve a newer commit.
+
+Only screenshot changes require a visual review. A collaborator with write
+access, other than the PR author, must inspect the report and submit an
+**approving PR review** containing a standalone line:
+
+```
+Visual approved
+```
+
+The approval must be on the current head commit, after the capture completed.
+A newer commit or capture, a dismissed approval, or a subsequent request for
+changes invalidates it. A review-event workflow triggers re-evaluation. The
+`Visual approval` status succeeds automatically for unchanged screenshots,
+stays pending for changes awaiting review, and fails if capture failed.
+
+**Activation:** these trusted workflows must first be merged to the default
+branch. Then make `Visual approval` a required status check for `main` using
+branch protection or a repository ruleset. Until that repository setting is
+enabled, the status reports approval but cannot prevent merging. This avoids
+requiring blanket PR approvals when screenshots did not change.
+
+For local base/head captures, the harness also accepts `VR_REPO_ROOT` (built
+extension root), `VR_BASELINE_DIR`, and `VR_OUTPUT_DIR`. `--review` treats pixel
+changes as reviewable evidence while still failing capture errors. These are
+optional; the existing local comparison/update commands still work.
+
+Changed committed baseline PNGs also require visual approval and are embedded
+as base/PR image pairs in the PR description. This covers changes to the test
+scenes or reference images even when both builds render identically with the
+new fixture catalogue. Artifact comparisons and committed-baseline comparisons
+are labeled separately because they answer different questions.
