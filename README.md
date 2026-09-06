@@ -32,7 +32,7 @@ Since this extension is not yet on the Chrome Web Store, you'll need to load it 
 
 If you want to develop or modify the extension:
 
-1. Install [Node.js](https://nodejs.org/) (v18 or later)
+1. Install [Node.js](https://nodejs.org/) (v24, matching CI)
 
 2. Clone and build:
 
@@ -63,7 +63,7 @@ chromium-extension/
       doi-augment.ts     # Resolve titles to DOIs via Crossref + OpenAlex
       flora-api.ts       # FORRT replication API client
       messages.ts        # Message types for content ↔ background
-      cache.ts           # Session cache (chrome.storage.session)
+      cache.ts           # Persistent lookup cache (chrome.storage.local)
       site-adapters.ts   # Per-site pill placement registry (see below)
       debounce.ts        # Debounce utility
       debug.ts           # Debug logger + capture (gated on the flora_debug flag)
@@ -224,7 +224,7 @@ never included.
 ### Tech stack
 
 - **TypeScript** (strict mode)
-- **esbuild** for bundling (fast, <50KB bundles)
+- **esbuild** for bundling; TypeScript checks run separately with `npm run typecheck`
 - **Zod** for API response validation
 - **Vitest** + jsdom + msw for testing
 - **Shadow DOM** for UI isolation (styles don't leak into host pages)
@@ -235,7 +235,7 @@ never included.
 1. **Content scripts** run on every page. They extract DOIs from the page using meta tags, JSON-LD, link hrefs, visible text, and HTML tables. Word-break characters are stripped and partial DOI suffixes are filtered out.
 2. If no DOIs are found directly, the extension tries to resolve the page/article title to a DOI using the **Crossref API** first, then **OpenAlex** as a fallback (fuzzy title matching with token-set-ratio > 88%).
 3. Found DOIs are sent to the **background service worker** via `chrome.runtime.sendMessage`.
-4. The service worker checks its **session cache**, deduplicates in-flight requests, and calls the **FORRT Replication API** for any uncached DOIs.
+4. The service worker checks its **persistent local cache**, deduplicates in-flight requests, and calls the **FORRT Replication API** for any uncached DOIs.
 5. Results are sent back to the content script, which renders **banners** and **inline badges** using Shadow DOM.
 6. On **search-results sites** (Google Scholar, OpenAlex, Semantic Scholar, PubMed, Europe PMC, Scopus, EBSCOhost), an indicator panel is injected into each result row where the site adapter's stylesheet places it (Scholar: the right-side `.gs_ggs` column, created if absent; OpenAlex: a right-hand column beside the result text; Semantic Scholar: beside the TLDR/abstract; PubMed: beside the authors/journal/PMID block; Europe PMC: a right-hand column below the title; EBSCOhost: beside the By/In metadata line, above the abstract; Scopus: the right end of the result's columns row in list view and in the title cell in table view).
 7. The content-general script detects **SPA navigations** (URL changes) and re-scans the page automatically.
