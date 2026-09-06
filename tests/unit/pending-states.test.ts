@@ -21,6 +21,10 @@ function rowText(pill: HTMLElement, attr: string): string {
     return pill.querySelector(`[${attr}]`)?.textContent ?? "";
 }
 
+function oaTooltip(pill: HTMLElement): string {
+    return pill.querySelector<HTMLElement>("[data-flora-oa-segment]")?.title ?? "";
+}
+
 function deferred<T>() {
     let resolve!: (v: T) => void;
     let reject!: (e: unknown) => void;
@@ -46,6 +50,7 @@ describe("pending lookups are not shown as negatives", () => {
 
         expect(rowText(pill, "data-flora-oa-row")).toContain("Checking");
         expect(rowText(pill, "data-flora-oa-row")).not.toContain("Not confirmed");
+        expect(oaTooltip(pill)).toContain("Checking");
     });
 
     it("shows Checking while the PubPeer lookup is in flight", () => {
@@ -63,6 +68,15 @@ describe("pending lookups are not shown as negatives", () => {
         await vi.waitFor(() =>
             expect(rowText(pill, "data-flora-oa-row")).toContain("Not confirmed open access")
         );
+        expect(oaTooltip(pill)).toContain("Not confirmed open access");
+        expect(oaTooltip(pill)).not.toContain("Unavailable");
+    });
+
+    it("keeps a confirmed not-indexed result distinct from an outage in both views", async () => {
+        const pill = createIndicatorPill({doi: DOI, oaStatus: Promise.resolve({isOa: false, url: null, notIndexed: true}), retraction: null});
+        await vi.waitFor(() => expect(rowText(pill, "data-flora-oa-row")).toContain("Not indexed by Unpaywall"));
+        expect(oaTooltip(pill)).toContain("Not indexed by Unpaywall");
+        expect(oaTooltip(pill)).not.toContain("Unavailable");
     });
 
     it("settles rather than hanging on Checking when a lookup rejects", async () => {
@@ -79,10 +93,12 @@ describe("pending lookups are not shown as negatives", () => {
         const pill = createIndicatorPill({doi: DOI, oaStatus: Promise.resolve(null), retraction: null});
         document.body.appendChild(pill);
         await vi.waitFor(() => expect(rowText(pill, "data-flora-oa-row")).toContain("Unavailable"));
+        expect(oaTooltip(pill)).toContain("Unavailable");
         vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ok: true, json: async () => ({is_oa: true, best_oa_location: {url: "https://example.org/free"}})}));
         pill.querySelector<HTMLButtonElement>("[data-flora-oa-row] button")!.focus();
         pill.querySelector<HTMLButtonElement>("[data-flora-oa-row] button")!.click();
         await vi.waitFor(() => expect(rowText(pill, "data-flora-oa-row")).toContain("Free full text available"));
+        expect(oaTooltip(pill)).toContain("Free full text available");
         expect(pill.querySelector("[data-flora-oa-row] button")).toBeNull();
         expect(pill.querySelector("[data-flora-oa-row]")!.contains(document.activeElement)).toBe(true);
     });
@@ -121,6 +137,7 @@ describe("open access without a contact email", () => {
             const text = rowText(pill, "data-flora-oa-row");
             expect(text).toContain("Add your email in Settings");
             expect(text).not.toContain("Not confirmed open access");
+            expect(oaTooltip(pill)).toContain("Add your email in Settings");
         });
     });
 
