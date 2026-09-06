@@ -36,7 +36,9 @@ export async function enforceCacheBudget(bytes: number): Promise<void> {
     const entry = all[key] as {expiresAt?: number | null} | undefined;
     return typeof entry?.expiresAt === "number" && entry.expiresAt <= now;
   };
-  const ordered = keys.sort((a, b) => Number(expired(b)) - Number(expired(a)) || writtenAt(all[a]) - writtenAt(all[b]));
+  const age = (key: string) => key === "RetractionLookupLocal" && typeof all.synctime === "number"
+    ? all.synctime : writtenAt(all[key]);
+  const ordered = keys.sort((a, b) => Number(expired(b)) - Number(expired(a)) || age(a) - age(b));
   const encoder = new TextEncoder();
   let cursor = 0;
   while (used > bytes && cursor < ordered.length) {
