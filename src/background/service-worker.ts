@@ -538,9 +538,15 @@ async function loadRetractionSource(signal: AbortSignal): Promise<RetractionMaps
     signal.throwIfAborted();
     const generation = retractionGeneration;
     const started = performance.now();
-    const storageResult = await chrome.storage.local.get([RET_MAP_KEY]);
+    let stored: RetractionMaps | undefined;
+    try {
+        const storageResult = await chrome.storage.local.get([RET_MAP_KEY]);
+        stored = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
+    } catch (error) {
+        signal.throwIfAborted();
+        debugWarn("Retractions: storage unavailable — using bundled data", error);
+    }
     signal.throwIfAborted();
-    const stored = storageResult[RET_MAP_KEY] as RetractionMaps | undefined;
     const hasStoredData = !!stored && (
         Object.keys(stored.retractions || {}).length > 0 ||
         Object.keys(stored.concerns || {}).length > 0

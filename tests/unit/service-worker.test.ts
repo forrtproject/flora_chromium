@@ -483,6 +483,16 @@ describe("service-worker", () => {
             vi.unstubAllGlobals();
         });
 
+        it("checks bundled data when storage is unavailable", async () => {
+            vi.mocked(chrome.storage.local.get).mockRejectedValue(new Error("Storage unavailable"));
+            vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+                retractions: {"10.1234/paper": "10.1234/notice"}, concerns: {},
+            }))));
+            const response = await sendRetractionCheck(["10.1234/paper"]);
+            expect(response.error).toBeUndefined();
+            expect(response.results).toEqual([{originDoi: "10.1234/paper", doi: "10.1234/notice", kind: "retraction"}]);
+        });
+
         it("does not start fallback loading after its last caller cancels during storage access", async () => {
             blockRetractionMapReads();
             const fetchMock = vi.fn(globalThis.fetch);
