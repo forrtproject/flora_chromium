@@ -1,4 +1,5 @@
 import {LocalCache, MONTH_MS} from "@shared/cache";
+import {installCacheBudget} from "@shared/cache-budget";
 import {createDoiSet, lookupDOIs} from "@shared/flora-api";
 import {RET_MAP_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
 import type {DoiString, ReplicationResult, RetractionResponse} from "@shared/types";
@@ -12,7 +13,9 @@ import {getSettings, isSetupComplete} from "@shared/settings";
 import {appendDebugEntries, installDebugLogStore} from "@shared/debug-log";
 import {debugError, debugLog, debugWarn, isDebugEnabledAsync} from "@shared/debug";
 
-const cache = new LocalCache<ReplicationResult>("flora");
+// The worker-wide manager budgets all providers together.
+const cache = new LocalCache<ReplicationResult>("flora", 0);
+installCacheBudget();
 
 // The worker owns the debug log: its own entries are stored directly, and
 // every other context ships batches here via FLORA_DEBUG_ENTRIES.
@@ -22,20 +25,8 @@ installDebugLogStore();
 // flag has been read — a top-level debugLog runs before that and is dropped.
 isDebugEnabledAsync().then(() => debugLog("Worker started")).catch(() => {});
 
-// Initialise cache quota from persisted settings (service worker may restart).
-getSettings().then(({ cacheQuotaMb }) => {
-    cache.setQuota(cacheQuotaMb === 0 ? 0 : cacheQuotaMb * 1024 * 1024);
-}).catch((err) => debugError("Cache quota: could not read settings —", err));
-
-// Keep quota in sync when the user changes the setting; drop the cached
-// retraction source whenever a fresh map is synced into local storage.
+// Drop the in-memory retraction source when its storage entry changes.
 chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "sync" && "flora_settings" in changes) {
-        const next = (changes["flora_settings"].newValue as { cacheQuotaMb?: number } | undefined);
-        if (next?.cacheQuotaMb != null) {
-            cache.setQuota(next.cacheQuotaMb === 0 ? 0 : next.cacheQuotaMb * 1024 * 1024);
-        }
-    }
     if (area === "local" && RET_MAP_KEY in changes) {
         retractionGeneration++;
         cachedRetractionSource = null;
