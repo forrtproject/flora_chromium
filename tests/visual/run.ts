@@ -52,7 +52,8 @@ const VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1 };
 // differ before a fixture counts as a regression. The budget is an absolute
 // count rather than a fraction of the page: 0.1 % of a 1280×1465 full-page shot
 // is ~1,900 pixels, enough for a whole pill to move without failing. Renders
-// are byte-identical run to run, so a real change always clears this bar.
+// can contain tiny raster differences; this budget applies only to local
+// regression failure. PR review records every raw RGBA difference separately.
 const PIXEL_THRESHOLD = 0.1;
 const MAX_DIFF_PIXELS = 100;
 
@@ -346,14 +347,14 @@ async function captureFixture(
       };
     }
 
+    const changed = !baseline.data.equals(actual.data);
     const { width, height } = baseline;
     const diff = new PNG({ width, height });
     const diffPixels = pixelmatch(baseline.data, actual.data, diff.data, width, height, {
       threshold: PIXEL_THRESHOLD,
     });
+    if (changed) writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.diff.png`), PNG.sync.write(diff));
     if (diffPixels > MAX_DIFF_PIXELS) {
-      mkdirSync(OUTPUT_DIR, { recursive: true });
-      writeFileSync(path.join(OUTPUT_DIR, `${fixture.name}.diff.png`), PNG.sync.write(diff));
       return {
         name: fixture.name,
         status: "fail",
@@ -362,7 +363,8 @@ async function captureFixture(
       };
     }
 
-    return { name: fixture.name, status: "pass", detail: `${diffPixels} px differ` };
+    return { name: fixture.name, status: "pass", changed,
+      detail: changed ? `Raw pixels changed; ${diffPixels} perceptual px differ (local budget ${MAX_DIFF_PIXELS})` : "0 px differ" };
   } finally {
     await page.close().catch(() => {});
   }
@@ -456,7 +458,7 @@ async function main(): Promise<void> {
     return;
   }
   if (REVIEW && failures.every((r) => r.changed)) {
-    console.log(`Visual review: ${failures.length} changed fixture(s).`);
+    console.log(`Visual review: ${results.filter(r => r.changed).length} changed fixture(s).`);
     return;
   }
   if (failures.length > 0) {

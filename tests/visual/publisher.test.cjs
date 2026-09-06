@@ -72,6 +72,7 @@ test('visual publication policy', async t => {
   await t.test('requires a current human approval after capture', async () => {
     assert.equal((await scenario()).state,'success');
     assert.equal((await scenario({changed:true})).state,'pending');
+    assert.equal((await scenario({results:[{name:'fixture',status:'pass',detail:'One raw channel differs within local budget',changed:true}]})).state,'pending');
     assert.equal((await scenario({changed:true,review:approved})).state,'success');
     assert.equal((await scenario({changed:true,review:{...approved,commit_id:'old'}})).state,'pending');
     assert.equal((await scenario({changed:true,review:{...approved,user:{login:'author',type:'User'}}})).state,'pending');
@@ -92,6 +93,9 @@ test('visual publication policy', async t => {
     const baseline=await scenario({files:[{filename:'tests/visual/baselines/fixture.png',status:'modified'}]});
     assert.equal(baseline.state,'pending'); assert.match(baseline.body,/raw.githubusercontent.com/);
     assert.equal((await scenario({files:[{filename:'tests/visual/run.ts',status:'modified'}]})).state,'pending');
+    for (const filename of ['tsconfig.json', 'tsconfig.visual.json', '.npmrc']) {
+      assert.equal((await scenario({files:[{filename,status:'modified'}]})).state,'pending');
+    }
     assert.equal((await scenario({files:[{filename:'package.json',status:'modified'}],review:approved})).state,'success');
     assert.equal((await scenario({files:[{filename:'tests/fixtures/no-dois.html',status:'modified'}]})).state,'success');
     for (const name of ['article-with-dois','doi-in-table','retracted']) {

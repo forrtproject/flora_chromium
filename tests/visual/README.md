@@ -131,7 +131,7 @@ Stability bar: after regenerating baselines, `npm run test:visual` must report
 **0 px difference on every fixture across five consecutive runs** before the
 baselines are committed.
 
-Comparison uses `pixelmatch` at a per-pixel threshold of `0.1`; a fixture fails
+Local comparison uses `pixelmatch` at a per-pixel threshold of `0.1`; a fixture fails
 if more than **100 pixels** differ. The budget is an absolute count so that it
 stays meaningful on a tall full-page shot, where a percentage would leave room
 for a whole pill to move. On failure the actual and diff images are written to
@@ -164,6 +164,9 @@ and removal of the work toast. A timeout is a failure, including in update
 mode. This is a readiness guard, not a claim that every async interaction is
 covered. Popovers, keyboard interaction, popup/options, search-site layouts,
 and narrow viewports still need additional visual scenarios.
+
+The PR approval gate uses exact raw RGBA equality: even a one-channel change
+within the local perceptual budget requires visual approval.
 
 CI stores all before/after PNGs, changed-pixel diff images (when dimensions
 match), JSON results, and a self-contained `index.html` in the `visual-report`

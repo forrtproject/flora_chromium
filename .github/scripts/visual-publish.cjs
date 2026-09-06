@@ -25,7 +25,7 @@ module.exports = async ({github, context}) => {
   const baselineFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && screenshotPath.test(name)));
   // A PR controls its capture job and artifacts. Changes to that machinery
   // cannot certify themselves as unchanged and bypass human review.
-  const capturePath = /^(tests\/visual\/|tests\/fixtures\/(article-with-dois|doi-in-table|retracted)\.html$|\.github\/(workflows\/visual[^/]*\.yml|scripts\/visual-publish\.cjs)$|package(?:-lock)?\.json$|esbuild\.config\.ts$|manifest\.json$)/;
+  const capturePath = /^(tests\/visual\/|tests\/fixtures\/(article-with-dois|doi-in-table|retracted)\.html$|\.github\/(workflows\/visual[^/]*\.yml|scripts\/visual-publish\.cjs)$|package(?:-lock)?\.json$|esbuild\.config\.ts$|manifest\.json$|tsconfig[^/]*\.json$|\.npmrc$)/;
   const captureFiles = files.filter(f => [f.filename, f.previous_filename].some(name => name && capturePath.test(name)));
   const needsApproval = changed.length > 0 || captureFiles.length > 0 || baselineFiles.length > 0;
   let approved = false;
