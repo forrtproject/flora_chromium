@@ -198,7 +198,7 @@ function whenIdle(fn: () => void, timeout = 1000): void {
 
 // Coalesce repeated mutation callbacks, including while the tab is in the background.
 const runScanPasses = serializeWithRerun(async () => {
-    await waitUntilVisible();
+    if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
     if (floraHidden || !canStartAutomaticWork()) return;
     beginWorkIndicator({stages: ["scan", "validate", "augment", "notices", "lookup", "report"]});
     try {
@@ -845,7 +845,7 @@ const SHEET_UNAVAILABLE = "Full sheet unavailable — only visible cells could b
 async function fetchSheetDois(): Promise<void> {
     const parsed = parseSheetsUrl(location.href);
     if (!parsed) return;
-    await waitUntilVisible();
+    if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
     const current = parseSheetsUrl(location.href);
     if (floraHidden || !canStartAutomaticWork() || !current ||
         current.spreadsheetId !== parsed.spreadsheetId || current.gid !== parsed.gid) return;

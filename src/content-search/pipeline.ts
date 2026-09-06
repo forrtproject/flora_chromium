@@ -16,7 +16,7 @@ import type {LookupRequest, LookupResponse} from "@shared/messages";
 import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator-pill";
 import {applyPlacement} from "@shared/site-adapters";
 import {fetchOpenAccess} from "@shared/openaccess";
-import {canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
@@ -77,10 +77,14 @@ export function processSearchResults(adapter: SearchSiteAdapter, root: ParentNod
     const existing = pending.get(root);
     if (existing) return existing;
     const next = passQueue.then(async () => {
-        await waitUntilVisible();
-        pending!.delete(root);
-        if (pending!.size === 0) pendingPasses.delete(adapter);
-        await runQueuedPass(adapter, root);
+        try {
+            if (!canStartAutomaticWork() || !await waitUntilVisible(activeWorkSignal())) return;
+            pending!.delete(root);
+            await runQueuedPass(adapter, root);
+        } finally {
+            if (pending!.get(root) === next) pending!.delete(root);
+            if (pending!.size === 0 && pendingPasses.get(adapter) === pending) pendingPasses.delete(adapter);
+        }
     });
     pending.set(root, next);
     // Keep the queue itself clean: a rejected pass is reported to its own
@@ -103,8 +107,11 @@ async function runQueuedPass(adapter: SearchSiteAdapter, root: ParentNode): Prom
         await runPass(adapter, rows);
     } finally {
         if (isWorkCancelled()) {
-            // Rows interrupted before a panel exists can be tried after an explicit resume.
-            for (const row of rows) if (!row.querySelector("[data-flora-panel]")) row.removeAttribute(PROCESSED_ATTR);
+            // A panel is placed before its lookup completes; it is not evidence of completion.
+            for (const row of rows) {
+                row.querySelectorAll("[data-flora-panel]").forEach(panel => panel.remove());
+                row.removeAttribute(PROCESSED_ATTR);
+            }
         }
         endWorkIndicator();
     }
