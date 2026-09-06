@@ -1,3 +1,5 @@
+import {safeSendMessage, type LookupResponse} from "@shared/messages";
+import {fetchOpenAccess} from "@shared/openaccess";
 // Merged FLoRA indicator pill — combines the DOI badge, Open Access padlock,
 // PubPeer discussion marker, and retraction/replication badge into a single
 // pill (mockup: a rounded maroon pill with icon segments split by dividers).
@@ -178,15 +180,15 @@ function buildOaSegment(oa: OpenAccessStatus | null): HTMLElement {
     return shieldFromPageCss(el);
 }
 
-function buildPubPeerSegment(feedback: PubPeerFeedback | null): HTMLElement {
+function buildPubPeerSegment(feedback: PubPeerFeedback | null, answered: boolean | "pending" = "pending"): HTMLElement {
     const available = !!feedback && feedback.total_comments > 0;
     const el = document.createElement("span");
     el.setAttribute("data-flora-pubpeer-segment", "");
     el.style.cssText = `display:inline-flex;align-items:center;line-height:0;color:#fff;opacity:${available ? "1" : "0.35"};`;
     el.innerHTML = PUBPEER_HUB_SVG;
-    el.title = available && feedback
+    el.title = answered === "pending" ? "Checking PubPeer…" : available && feedback
         ? `${feedback.total_comments} ${feedback.total_comments === 1 ? "comment" : "comments"} on PubPeer`
-        : "No PubPeer discussion found";
+        : answered ? "No PubPeer discussion found" : "PubPeer status unavailable";
     return shieldFromPageCss(el);
 }
 
@@ -348,7 +350,7 @@ function buildRow(opts: {
     if (!useLink && opts.onAction) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = opts.compact ? "Settings" : "Settings ↗";
+        button.textContent = opts.actionLabel ?? "Settings";
         button.style.cssText =
             `all:unset;cursor:pointer;${rowActionStyle(opts.accent, opts.compact)}`;
         button.addEventListener("click", (e) => {
@@ -359,6 +361,17 @@ function buildRow(opts: {
         row.style.cursor = "default";
     }
     return row;
+}
+
+/** Keep keyboard position when an async provider row replaces its focused control. */
+function replaceIndicatorRow(previous: HTMLElement, next: HTMLElement): void {
+    const focused = previous.contains(document.activeElement);
+    previous.replaceWith(next);
+    if (focused) {
+        const target = next.matches("a,button") ? next : next.querySelector<HTMLElement>("a,button") ?? next;
+        if (target === next && !next.matches("a,button")) next.tabIndex = -1;
+        target.focus({preventScroll: true});
+    }
 }
 
 async function hasContactEmail(): Promise<boolean> {
@@ -415,10 +428,12 @@ type OaState = OpenAccessStatus | null | "pending" | "no-email";
 function oaSubtitle(state: OaState, available: boolean): string {
     if (state === "pending") return "Checking…";
     if (state === "no-email") return "Add your email in Settings to check open access";
+    if (state === null) return "Unavailable";
+    if (state.notIndexed) return "Not indexed by Unpaywall";
     return available ? "Free full text available" : "Not confirmed open access";
 }
 
-function buildOaRow(state: OaState, compact = false): HTMLElement {
+function buildOaRow(state: OaState, compact = false, retry?: () => void): HTMLElement {
     const oa = state === "pending" || state === "no-email" ? null : state;
     const available = !!oa?.isOa;
     const locations = oaLocations(oa);
@@ -430,10 +445,10 @@ function buildOaRow(state: OaState, compact = false): HTMLElement {
             available: available && locations.length === 1,
             title: "Open Access",
             subtitle: oaSubtitle(state, available),
-            onAction: state === "no-email" ? openFloraOptions : undefined,
-            subtitleShort: available ? "Free" : "—",
+            onAction: state === "no-email" ? openFloraOptions : state === null ? retry : undefined,
+            subtitleShort: state === null ? "Unavailable" : state === "pending" ? "…" : oa?.notIndexed ? "Not indexed" : available ? "Free" : "—",
             href: locations[0]?.url,
-            actionLabel: "View PDF",
+            actionLabel: state === "no-email" ? "Settings" : state === null ? "Retry" : "View PDF",
             attr: "data-flora-oa-row",
             compact,
         });
@@ -510,12 +525,12 @@ function buildOaRow(state: OaState, compact = false): HTMLElement {
     return wrapper;
 }
 
-function buildPubPeerRow(state: PubPeerFeedback | null | "pending", compact = false): HTMLElement {
-    const feedback = state === "pending" ? null : state;
+function buildPubPeerRow(state: PubPeerFeedback | null | "pending" | "unavailable", compact = false, retry?: () => void): HTMLElement {
+    const feedback = typeof state === "string" ? null : state;
     const available = !!feedback && feedback.total_comments > 0;
     const subtitle = state === "pending"
         ? "Checking…"
-        : available && feedback
+        : state === "unavailable" ? "Unavailable" : available && feedback
             ? `${feedback.total_comments} ${feedback.total_comments === 1 ? "comment" : "comments"}`
             : "No discussion found";
     return buildRow({
@@ -524,9 +539,10 @@ function buildPubPeerRow(state: PubPeerFeedback | null | "pending", compact = fa
         available,
         title: "PubPeer",
         subtitle,
-        subtitleShort: state === "pending" ? "…" : available && feedback ? `${feedback.total_comments}` : "—",
+        subtitleShort: state === "pending" ? "…" : state === "unavailable" ? "Unavailable" : available && feedback ? `${feedback.total_comments}` : "—",
         href: feedback?.url,
-        actionLabel: "View thread",
+        onAction: state === "unavailable" ? retry : undefined,
+        actionLabel: state === "unavailable" ? "Retry" : "View thread",
         attr: "data-flora-pubpeer-row",
         compact,
     });
@@ -787,7 +803,7 @@ interface IndicatorRowsOptions {
     reproductionsCount: number | null;
     /** Called when the async lookup lands, so a caller can mirror it elsewhere. */
     onOa?: (oa: OpenAccessStatus | null) => void;
-    onPubPeer?: (feedback: PubPeerFeedback | null) => void;
+    onPubPeer?: (feedback: PubPeerFeedback | null, answered: boolean | "pending") => void;
     /** Single-line rows and tighter metrics, for the always-visible panel. */
     compact?: boolean;
 }
@@ -809,33 +825,43 @@ function buildIndicatorRows(opts: IndicatorRowsOptions): HTMLElement {
     sectionDivider.style.cssText = `height:1px;background:#eaeef2;margin:${compact ? "2px 0" : "0 0 2px"};`;
     rows.appendChild(sectionDivider);
 
-    let oaRow = buildOaRow(opts.oaStatus ? "pending" : null, compact);
+    let oaRow = buildOaRow(opts.oaStatus ? "pending" : null, compact, () => retryOa());
     rows.appendChild(oaRow);
     const settleOa = (state: OaState, oa: OpenAccessStatus | null): void => {
-        const resolved = shieldFromPageCss(buildOaRow(state, compact));
-        oaRow.replaceWith(resolved);
+        const resolved = shieldFromPageCss(buildOaRow(state, compact, retryOa));
+        replaceIndicatorRow(oaRow, resolved);
         oaRow = resolved;
         opts.onOa?.(oa);
     };
-    if (opts.oaStatus) {
-        void opts.oaStatus
-            .then(async (oa) => {
-                settleOa(oa ?? (await hasContactEmail() ? null : "no-email"), oa);
-            })
+    const loadOa = (request: Promise<OpenAccessStatus | null>): void => {
+        void request.then(async oa => settleOa(oa ?? (await hasContactEmail() ? null : "no-email"), oa))
             .catch(() => settleOa(null, null));
-    }
+    };
+    const retryOa = (): void => {
+        settleOa("pending", null);
+        loadOa(fetchOpenAccess(opts.doi));
+    };
+    if (opts.oaStatus) loadOa(opts.oaStatus);
 
     let pubpeerRow = buildPubPeerRow("pending", compact);
     rows.appendChild(pubpeerRow);
-    const settlePubPeer = (feedback: PubPeerFeedback | null): void => {
-        const resolved = shieldFromPageCss(buildPubPeerRow(feedback, compact));
-        pubpeerRow.replaceWith(resolved);
+    const settlePubPeer = (feedback: PubPeerFeedback | null | "unavailable" | "pending"): void => {
+        const resolved = shieldFromPageCss(buildPubPeerRow(feedback, compact, retryPubPeer));
+        replaceIndicatorRow(pubpeerRow, resolved);
         pubpeerRow = resolved;
-        opts.onPubPeer?.(feedback);
+        opts.onPubPeer?.(typeof feedback === "string" ? null : feedback, feedback === "pending" ? "pending" : typeof feedback !== "string");
     };
-    void lookupPubPeerForDoi(opts.doi)
-        .then(settlePubPeer)
-        .catch(() => settlePubPeer(null));
+    const retryPubPeer = (): void => {
+        settlePubPeer("pending");
+        void lookupPubPeerForDoi(opts.doi).then(settlePubPeer).catch(error => {
+            settlePubPeer("unavailable");
+            if (typeof error?.retryAfterMs === "number") {
+                const subtitle = pubpeerRow.querySelector("[data-flora-row-sub]");
+                if (subtitle) subtitle.textContent = compact ? "Rate limited" : `Rate limited — try again in ${Math.ceil(error.retryAfterMs / 1000)} seconds`;
+            }
+        });
+    };
+    retryPubPeer();
 
     rows.appendChild(buildBadgeRow(resolveBadgeSignal(
         opts.doi, opts.retraction, opts.replicationsCount, opts.reproductionsCount
@@ -983,8 +1009,8 @@ export function createIndicatorPill(options: IndicatorPillOptions): HTMLElement 
             oaSegment.replaceWith(resolved);
             oaSegment = resolved;
         },
-        onPubPeer: (feedback) => {
-            const resolved = buildPubPeerSegment(feedback);
+        onPubPeer: (feedback, answered) => {
+            const resolved = buildPubPeerSegment(feedback, answered);
             pubpeerSegment.replaceWith(resolved);
             pubpeerSegment = resolved;
         },
@@ -1185,14 +1211,15 @@ export function createIndicatorPanel(options: IndicatorPillOptions): HTMLElement
 
 export function updateIndicatorPillBadges(
     root: ParentNode,
-    pageState: ReadonlyMap<DoiString, LookupState>,
+    pageState: Map<DoiString, LookupState>,
     redacts: readonly RetractionResponse[],
-    scope: IndicatorScope = "pills"
+    scope: IndicatorScope = "pills",
+    onlyDoi?: DoiString
 ): void {
     const retractionByDoi = new Map(redacts.map((r) => [r.originDoi, r] as const));
     for (const wrapper of root.querySelectorAll<HTMLElement>(indicatorSelector(scope))) {
         const doi = wrapper.getAttribute("data-flora-doi") as DoiString | null;
-        if (!doi) continue;
+        if (!doi || (onlyDoi && doi !== onlyDoi)) continue;
         const badgeSegment = wrapper.querySelector<HTMLElement>("[data-flora-badge-segment]");
         const badgeRow = wrapper.querySelector<HTMLElement>("[data-flora-badge-row]");
         if (!badgeSegment && !badgeRow) continue;
@@ -1203,9 +1230,34 @@ export function updateIndicatorPillBadges(
         const reproductionsCount = state?.status === "matched" ? state.result.record.stats.n_reproductions_total : null;
         const signal = resolveBadgeSignal(doi, retraction, replicationsCount, reproductionsCount);
 
+        if (!retraction && (state?.status === "error" || state?.status === "loading")) {
+            signal.rowSubtitle = state.status === "loading" ? "Checking FORRT…" : "FORRT unavailable";
+        }
         if (badgeSegment) badgeSegment.replaceWith(buildBadgeSegment(signal));
-        if (badgeRow) {
-            badgeRow.replaceWith(shieldFromPageCss(buildBadgeRow(signal, wrapper.hasAttribute("data-flora-panel"))));
+        if (badgeRow && !retraction && (state?.status === "error" || state?.status === "loading")) {
+            const pending = state.status === "loading";
+            const retry = async () => {
+                const next = pageState;
+                next.set(doi, {status: "loading"});
+                updateIndicatorPillBadges(root, next, redacts, scope, doi);
+                try {
+                    const response = await safeSendMessage<LookupResponse>({type: "FLORA_LOOKUP", dois: [doi]});
+                    if (!response || response.errors?.[doi]) throw new Error("FORRT unavailable");
+                    const result = response.results[doi];
+                    next.set(doi, result ? {status: "matched", result, source: "extracted"} : {status: "no-match"});
+                } catch {
+                    next.set(doi, {status: "error", message: "FORRT unavailable"});
+                }
+                updateIndicatorPillBadges(root, next, redacts, scope, doi);
+            };
+            replaceIndicatorRow(badgeRow, shieldFromPageCss(buildRow({
+                iconHtml: DOT_ICON("#853953"), accent: "#853953", available: false,
+                title: "FORRT", subtitle: pending ? "Checking…" : "Unavailable",
+                actionLabel: "Retry", onAction: pending ? undefined : () => { void retry(); },
+                attr: "data-flora-badge-row", compact: wrapper.hasAttribute("data-flora-panel"),
+            })));
+        } else if (badgeRow) {
+            replaceIndicatorRow(badgeRow, shieldFromPageCss(buildBadgeRow(signal, wrapper.hasAttribute("data-flora-panel"))));
         }
     }
 }

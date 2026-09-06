@@ -209,10 +209,10 @@ async function scanWholePage(): Promise<void> {
 let nothingToFlagReportedFor: string | null = null;
 
 function reportNothingToFlag(examined: number, flagged: boolean): void {
-    if (examined === 0 || flagged) return;
+    if (examined === 0 || flagged || [...pageState.values()].some(state => state.status === "error")) return;
     if (nothingToFlagReportedFor === location.href) return;
     nothingToFlagReportedFor = location.href;
-    showToast(`Checked ${count(examined, "paper")} — nothing to flag`, {tone: "success"});
+    showToast(`Checked ${count(examined, "paper")} — no flags in available results`, {tone: "success"});
 }
 
 async function runScanPass(): Promise<void> {
@@ -375,8 +375,11 @@ async function runScanPass(): Promise<void> {
             reportWorkStage("lookup", `Looking up ${count(newDois.length, "DOI")} in FLoRA…`);
             response = await safeSendMessage<LookupResponse>(request);
         } catch (err) {
+            if (isWorkCancelled()) return;
             debugError("Replication lookup failed:", err);
+            for (const doi of newDois) pageState.set(doi, {status: "error", message: "FORRT unavailable"});
             if (!isSheets) placeTitleIndicatorPill();
+            updateIndicatorPillBadges(document, pageState, redacts);
             renderErrorBanner("Couldn't load replication data for this page");
             return;
         }

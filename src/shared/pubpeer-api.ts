@@ -66,7 +66,8 @@ async function fetchPubPeer(
     throw new Error(`PubPeer API error: ${response.status}`);
   }
   const data = (await response.json()) as { status: string; feedbacks?: PubPeerFeedback[] };
-  return data.feedbacks ?? [];
+  if (!Array.isArray(data.feedbacks)) throw new Error("PubPeer returned an invalid response");
+  return data.feedbacks;
 }
 
 export async function lookupPubPeer(
@@ -105,7 +106,7 @@ let rateLimitedUntil = 0;
  * Returns a Map containing only the DOIs PubPeer has a record for.
  */
 export async function lookupPubPeerForDois<T extends string>(
-  dois: T[]
+  dois: T[], unavailable = new Set<string>()
 ): Promise<Map<T, PubPeerFeedback>> {
   const result = new Map<T, PubPeerFeedback>();
   if (dois.length === 0) return result;
@@ -132,6 +133,7 @@ export async function lookupPubPeerForDois<T extends string>(
   }
 
   if (now < rateLimitedUntil) {
+    for (const doi of uncached) unavailable.add(doi);
     debugLog(`PubPeer: rate-limited, skipping ${uncached.length} uncached DOI(s)`);
     return result;
   }
@@ -141,6 +143,7 @@ export async function lookupPubPeerForDois<T extends string>(
   try {
     feedbacks = await fetchPubPeer(uncached.map(cacheKey), []);
   } catch (err) {
+    for (const doi of uncached) unavailable.add(doi);
     if (err instanceof PubPeerRateLimitError) {
       rateLimitedUntil = now + err.retryAfterMs;
       debugLog(`PubPeer: rate limited; backing off ${err.retryAfterMs}ms`);
@@ -171,7 +174,7 @@ export async function lookupPubPeerForDois<T extends string>(
 // POSTs, all issued before any has written to the cache — so all of them miss
 // it and PubPeer 429s. Collect same-tick lookups into one batch.
 const BATCH_WINDOW_MS = 50;
-const pendingDois = new Map<string, Array<(fb: PubPeerFeedback | null) => void>>();
+const pendingDois = new Map<string, Array<{resolve: (fb: PubPeerFeedback | null) => void; reject: (err: Error) => void}>>();
 let flushHandle: ReturnType<typeof setTimeout> | null = null;
 
 function flushPendingDois(): void {
@@ -180,23 +183,27 @@ function flushPendingDois(): void {
   const batch = new Map(pendingDois);
   pendingDois.clear();
 
+  const unavailable = new Set<string>();
   const settle = (map: Map<string, PubPeerFeedback> | null) => {
     for (const [doi, resolvers] of batch) {
       const feedback = map?.get(doi) ?? null;
-      for (const resolve of resolvers) resolve(feedback);
+      for (const caller of resolvers) {
+        if (!map || unavailable.has(doi)) caller.reject(rateLimitedUntil > Date.now() ? new PubPeerRateLimitError(rateLimitedUntil - Date.now()) : new Error("PubPeer unavailable"));
+        else caller.resolve(feedback);
+      }
     }
   };
-  lookupPubPeerForDois([...batch.keys()]).then(settle).catch(() => settle(null));
+  lookupPubPeerForDois([...batch.keys()], unavailable).then(settle).catch(() => settle(null));
 }
 
-/** Resolves to null on miss or failure — callers render "no discussion" for both. */
+/** A confirmed miss resolves to null; unavailable responses reject so the UI can offer retry. */
 export function lookupPubPeerForDoi(doi: string): Promise<PubPeerFeedback | null> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const waiting = pendingDois.get(doi);
     if (waiting) {
-      waiting.push(resolve);
+      waiting.push({resolve, reject});
     } else {
-      pendingDois.set(doi, [resolve]);
+      pendingDois.set(doi, [{resolve, reject}]);
     }
     if (flushHandle === null) flushHandle = setTimeout(flushPendingDois, BATCH_WINDOW_MS);
   });

@@ -16,7 +16,6 @@ import {
   computeExecutablePath,
   detectBrowserPlatform,
   install,
-  resolveBuildId,
 } from "@puppeteer/browsers";
 import puppeteer, { type Browser, type CDPSession, type Page, type Target } from "puppeteer-core";
 import { PNG } from "pngjs";
@@ -40,12 +39,12 @@ import {
 declare const chrome: any;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, "../..");
+const REPO_ROOT = path.resolve(process.env.VR_REPO_ROOT ?? path.resolve(__dirname, "../.."));
 const VISUAL_DIR = __dirname;
 const NEW_FIXTURES_DIR = path.join(VISUAL_DIR, "fixtures");
 const REUSED_FIXTURES_DIR = path.join(REPO_ROOT, "tests", "fixtures");
-const BASELINE_DIR = path.join(VISUAL_DIR, "baselines");
-const OUTPUT_DIR = path.join(VISUAL_DIR, "output");
+const BASELINE_DIR = path.resolve(process.env.VR_BASELINE_DIR ?? path.join(VISUAL_DIR, "baselines"));
+const OUTPUT_DIR = path.resolve(process.env.VR_OUTPUT_DIR ?? path.join(VISUAL_DIR, "output"));
 
 // ── Determinism knobs ───────────────────────────────────────────────────────
 const VIEWPORT = { width: 1280, height: 900, deviceScaleFactor: 1 };
@@ -79,9 +78,11 @@ interface Fixture {
   name: string;
   /** Path served by the static server, relative to a fixtures root. */
   urlPath: string;
+  outage?: boolean;
 }
 
 const FIXTURES: Fixture[] = [
+  {name: "provider-unavailable", urlPath: "provider-unavailable.html", outage: true},
   // New visual fixtures (served from tests/visual/fixtures).
   { name: "ref-list-flex", urlPath: "ref-list-flex.html" },
   { name: "ref-list-grid", urlPath: "ref-list-grid.html" },
@@ -110,7 +111,7 @@ async function ensureChrome(): Promise<string> {
   const platform = detectBrowserPlatform();
   if (!platform) throw new Error("Unsupported platform for Chrome for Testing");
   const cacheDir = path.join(os.homedir(), ".cache", "puppeteer");
-  const buildId = await resolveBuildId(BrowserName.CHROME, platform, "stable");
+  const buildId = "152.0.7977.75";
 
   const execPath = computeExecutablePath({ browser: BrowserName.CHROME, buildId, cacheDir });
   if (!existsSync(execPath)) {
@@ -168,9 +169,13 @@ async function reseedBeforeFixture(target: Target): Promise<void> {
 }
 
 // ── Per-page request interception (page context) ────────────────────────────
-async function installPageInterception(page: Page): Promise<void> {
+async function installPageInterception(page: Page, outage = false): Promise<void> {
   await page.setRequestInterception(true);
   page.on("request", (req) => {
+    if (outage && ["pubpeer.com", "api.unpaywall.org"].includes(new URL(req.url()).hostname)) {
+      void req.respond({status: 503, body: "Provider unavailable"});
+      return;
+    }
     const verdict = classifyPageRequest(req.url());
     if (verdict === "allow") {
       req.continue().catch(() => {});
@@ -226,7 +231,7 @@ async function captureFixture(
   const page = await browser.newPage();
   try {
     await page.setViewport(VIEWPORT);
-    await installPageInterception(page);
+    await installPageInterception(page, fixture.outage);
 
     // The content script defers all work until the tab is visible — make it the
     // foreground tab (the extension opens a walkthrough tab on install).
@@ -258,6 +263,11 @@ async function captureFixture(
     // every glyph on the page.
     await page.evaluate(() => (document as Document).fonts.ready.then(() => undefined));
     await waitForSettle(page);
+    if (fixture.outage) {
+      await page.waitForSelector(".flora-indicator-pill", {timeout: 12000});
+      await page.click(".flora-indicator-pill");
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
 
     if (process.env.VR_DEBUG) {
       const dbg = await page.evaluate(() => ({

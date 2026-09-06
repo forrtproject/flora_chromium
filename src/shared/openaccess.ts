@@ -18,6 +18,8 @@ export interface OpenAccessLocation {
 export interface OpenAccessStatus {
     /** True when Unpaywall reports a free full-text location. */
     isOa: boolean;
+    /** Unpaywall answered that this DOI is outside its index. */
+    notIndexed?: boolean;
     /** Best free full-text URL (PDF preferred), or null. */
     url: string | null;
     /**
@@ -67,7 +69,7 @@ function dedupeByUrl(locations: OpenAccessLocation[]): OpenAccessLocation[] {
     return locations.filter((loc) => !seen.has(loc.url) && seen.add(loc.url));
 }
 
-const OA_CACHE = new BlobCache<OpenAccessStatus>({
+const OA_CACHE = new BlobCache<OpenAccessStatus & {checkedAt?: number}>({
     storageKey: "flora_oa_blob",
     ttlMs: 30 * 24 * 60 * 60 * 1000, // 30 days — OA status changes rarely
 });
@@ -84,7 +86,7 @@ async function getUserEmail(): Promise<string> {
  */
 export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | null> {
     const cached = await OA_CACHE.get(doi);
-    if (cached) return cached;
+    if (cached && (!cached.notIndexed || Date.now() - (cached.checkedAt ?? 0) < 5 * 60 * 1000)) return cached;
 
     const email = await getUserEmail();
     if (!email) return null;
@@ -93,12 +95,18 @@ export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | n
         const resp = await fetch(
             `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
         );
+        if (resp.status === 404) {
+            const status = {isOa: false, url: null, notIndexed: true, checkedAt: Date.now()};
+            void OA_CACHE.set(doi, status);
+            return status;
+        }
         if (!resp.ok) return null;
         const data = (await resp.json()) as {
             is_oa?: boolean;
             best_oa_location?: UnpaywallLocation | null;
             oa_locations?: UnpaywallLocation[] | null;
         };
+        if (typeof data.is_oa !== "boolean") return null;
         const best = data.best_oa_location ? toLocation(data.best_oa_location) : null;
         const rest = (data.oa_locations ?? [])
             .map(toLocation)
