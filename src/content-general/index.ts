@@ -13,9 +13,7 @@ import {
     safeSendMessage,
     augmentDOIsViaWorker,
     type LookupRequest,
-    type LookupResponse,
-    type SheetFetchRequest,
-    type SheetFetchResponse
+    type LookupResponse
 } from "@shared/messages";
 import {
     beginWorkIndicator,
@@ -48,6 +46,7 @@ import {applyPillStyle, applyPlacement, currentSiteAdapter} from "@shared/site-a
 import {fetchOpenAccess} from "@shared/openaccess";
 import {showToast} from "@shared/toast";
 import {resolveReferenceDois, renderResolvedReferences, releaseReferenceEntries, resetReferenceMarkers, type ResolvedReference} from "./references";
+import {fetchSheetCsv, parseSheetsUrl, sheetTabKey} from "./sheets";
 import {SeenDois} from "./seen-dois";
 import {serializeWithRerun} from "./serial-scan";
 import {startDomListener} from "./dom-listener";
@@ -83,9 +82,9 @@ let lastRenderedPageStateVersion = -1;
 let sheetFetchGen = 0;
 // DOIs extracted from the full sheet CSV (populated asynchronously on Sheets)
 let sheetCsvDois: DoiString[] = [];
-// Sheets modal: per-gid dismiss tracking & snooze
-// Gids where the user explicitly dismissed the modal (session only).
-const dismissedGids = new Set<string>();
+let sheetCsvAvailable = false;
+// Sheet tabs where the user explicitly dismissed the modal (session only).
+const dismissedSheets = new Set<string>();
 // Timestamp until which all Sheets modals are snoozed.
 let snoozeUntil = 0;
 // Google sheets match condition
@@ -800,20 +799,20 @@ async function checkPubPeer(refsPromise: Promise<ResolvedReference[]> | null): P
     }
 }
 
-function currentGid(): string {
-    return parseSheetsUrl(location.href)?.gid ?? "0";
+function currentSheetKey(): string {
+    return sheetTabKey(parseSheetsUrl(location.href));
 }
 
 function isSheetsModalSuppressed(): boolean {
     if (Date.now() < snoozeUntil) return true;
-    if (dismissedGids.has(currentGid())) return true;
+    if (dismissedSheets.has(currentSheetKey())) return true;
     return false;
 }
 
 const sheetsModalCallbacks: SheetsModalCallbacks = {
     onDismiss() {
-        dismissedGids.add(currentGid());
-        debugLog("Sheets modal dismissed for gid:", currentGid());
+        dismissedSheets.add(currentSheetKey());
+        debugLog("Sheets modal dismissed for tab:", currentSheetKey());
     },
     onSnooze() {
         snoozeUntil = Date.now() + 10 * 60 * 1000; // 10 minutes
@@ -821,50 +820,42 @@ const sheetsModalCallbacks: SheetsModalCallbacks = {
     },
 };
 
-/**
- * Parse the spreadsheet ID and gid from a Google Sheets URL.
- */
-function parseSheetsUrl(url: string): {
-    spreadsheetId: string;
-    gid: string
-} | null {
-    const idMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-    if (!idMatch) return null;
-    const gidMatch = url.match(/[#&]gid=(\d+)/);
-    return {spreadsheetId: idMatch[1], gid: gidMatch?.[1] ?? "0"};
-}
+const SHEET_UNAVAILABLE = "Full sheet unavailable — only visible cells could be checked.";
 
-/**
- * Fetch all cell data from the current sheet tab via CSV export,
- * extract DOIs, and trigger a run() so the modal updates.
- */
+/** Fetch the active tab in full, falling back to visible cells if export fails. */
 async function fetchSheetDois(): Promise<void> {
     const parsed = parseSheetsUrl(location.href);
     if (!parsed) return;
-
+    const alert = document.getElementById("flora-alert-toast");
+    if (alert?.textContent?.includes(SHEET_UNAVAILABLE)) alert.remove();
     const myGen = sheetFetchGen;
-    const request: SheetFetchRequest = {
-        type: "FLORA_SHEET_FETCH",
-        spreadsheetId: parsed.spreadsheetId,
-        gid: parsed.gid,
-    };
-
+    const isCurrent = () => myGen === sheetFetchGen &&
+        sheetTabKey(parsed) === sheetTabKey(parseSheetsUrl(location.href));
+    let unavailable = false;
     try {
-        const response = await safeSendMessage<SheetFetchResponse>(request);
-        if (myGen !== sheetFetchGen) return; // stale response — tab changed while fetching
-        if (!response || response.error || !response.csv) {
-            debugWarn("Sheets: CSV fetch failed —", response?.error);
-            return;
-        }
-        sheetCsvDois = extractDOIsFromText(response.csv);
+        const csv = await fetchSheetCsv(parsed);
+        if (!isCurrent()) return;
+        sheetCsvDois = extractDOIsFromText(csv);
+        sheetCsvAvailable = true;
         debugLog(`Sheets: CSV export found ${sheetCsvDois.length} DOIs`);
     } catch (err) {
-        if (myGen !== sheetFetchGen) return;
-        debugError("Sheets: CSV fetch error —", err);
+        if (!isCurrent()) return;
+        sheetCsvDois = [];
+        sheetCsvAvailable = false;
+        unavailable = true;
+        debugWarn("Sheets: full-tab export unavailable — checking visible cells only", err);
     }
-
-    // Always run — re-evaluates modal state even if the CSV fetch failed.
-    void scanWholePage().catch((err) => debugError("Sheets: scan pass failed —", err));
+    if (isWorkCancelled()) return;
+    await scanWholePage().catch((err) => debugError("Sheets: scan pass failed —", err));
+    if (!isCurrent() || isWorkCancelled()) return;
+    if (unavailable) {
+        showToast(SHEET_UNAVAILABLE, {
+            tone: "error",
+            action: {label: "Retry", onClick: () => fetchSheetDois()},
+        });
+    } else if (sheetCsvDois.length === 0 && extractDOIs(document).length === 0) {
+        showToast("No DOIs found in this sheet tab.");
+    }
 }
 
 
@@ -916,14 +907,15 @@ async function fetchSheetDois(): Promise<void> {
             // Fetch full sheet data via CSV export to get all DOIs regardless of scroll
             fetchSheetDois();
             // Poll for sheet tab switches — Sheets uses replaceState (no popstate).
-            let lastGid = parseSheetsUrl(location.href)?.gid ?? "0";
+            let lastSheet = sheetTabKey(parseSheetsUrl(location.href));
             setInterval(() => {
-                const nowGid = parseSheetsUrl(location.href)?.gid ?? "0";
-                if (nowGid !== lastGid) {
-                    lastGid = nowGid;
-                    debugLog("Sheets: tab change detected (gid:", nowGid, ") — re-fetching…");
+                const nowSheet = sheetTabKey(parseSheetsUrl(location.href));
+                if (nowSheet !== lastSheet) {
+                    lastSheet = nowSheet;
+                    debugLog("Sheets: tab change detected:", nowSheet, "— re-fetching…");
                     sheetFetchGen++;
                     sheetCsvDois = [];
+                    sheetCsvAvailable = false;
                     processedDois.clear();
                     seenDois.clear();
                     pageState.clear();
