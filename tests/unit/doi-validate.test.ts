@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } 
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
-import { validateDOI, validateDOIs, _resetValidationCacheForTesting } from "../../src/shared/doi-validate";
+import { validateDOIs, _resetValidationCacheForTesting } from "../../src/shared/doi-validate";
 import type { DoiString } from "../../src/shared/types";
 
 const server = setupServer();
@@ -32,7 +32,7 @@ function handleFromRequest(request: Request): string {
   return decodeURIComponent(url.pathname.replace("/api/handles/", ""));
 }
 
-describe("validateDOI", () => {
+describe("DOI validation outcomes and caching", () => {
   beforeEach(() => {
     (chrome.storage.local.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
     (chrome.storage.local.set as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
@@ -47,7 +47,7 @@ describe("validateDOI", () => {
       )
     );
 
-    const result = await validateDOI(doi("10.1038/nature12373"));
+    const result = (await validateDOIs([doi("10.1038/nature12373")])).get(doi("10.1038/nature12373"));
     expect(result).toBe(true);
   });
 
@@ -58,7 +58,7 @@ describe("validateDOI", () => {
       )
     );
 
-    const result = await validateDOI(doi("10.1038/doesnotexist"));
+    const result = (await validateDOIs([doi("10.1038/doesnotexist")])).get(doi("10.1038/doesnotexist"));
     expect(result).toBe(false);
   });
 
@@ -122,7 +122,7 @@ describe("validateDOI", () => {
       )
     );
 
-    await validateDOI(doi("10.1038/nature12373"));
+    await validateDOIs([doi("10.1038/nature12373")]);
 
     expect(chrome.storage.local.set).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -143,7 +143,7 @@ describe("validateDOI", () => {
       )
     );
 
-    await validateDOI(doi("10.1038/doesnotexist"));
+    await validateDOIs([doi("10.1038/doesnotexist")]);
 
     expect(chrome.storage.local.set).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -175,7 +175,7 @@ describe("validateDOI", () => {
       },
     });
 
-    const result = await validateDOI(doi("10.1038/cached"));
+    const result = (await validateDOIs([doi("10.1038/cached")])).get(doi("10.1038/cached"));
     expect(result).toBe(true);
   });
 
@@ -193,7 +193,7 @@ describe("validateDOI", () => {
       )
     );
 
-    const result = await validateDOI(doi("10.1038/expired"));
+    const result = (await validateDOIs([doi("10.1038/expired")])).get(doi("10.1038/expired"));
     expect(result).toBe(true);
   });
 });

@@ -696,12 +696,6 @@ function extractFromReferenceContainers(doc: Document, found: Set<DoiString>): v
   }
 }
 
-export function detectPageType(doc: Document): PageType {
-  const primaryDoi = extractPrimaryDOI(doc);
-  if (primaryDoi) return "article";
-  return pageTypeFromPath(doc);
-}
-
 function pageTypeFromPath(doc: Document): PageType {
   const path = doc.location?.pathname?.toLowerCase() ?? "";
   if (/\/(toc|issues?|volumes?|search|browse|list|results?|catalog|archive|index)(\/|$)/.test(path)) {
@@ -743,7 +737,6 @@ export function classifyPageDois(doc: Document): ClassifiedDois {
     articleDois: [...articleFound],
     referenceDois: [...referenceFound],
     otherDois: [...otherFound],
-    retractedDois: [],
     allDois: [...new Set([...articleFound, ...referenceFound, ...otherFound])],
   };
 }

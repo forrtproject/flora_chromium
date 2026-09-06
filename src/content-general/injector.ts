@@ -36,15 +36,11 @@ const LOGO_STYLE =
 
 const TEXT_STYLE = "flex:1;";
 
-const LINK_STYLE =
-    "color:#fff;text-decoration:underline;text-underline-offset:2px;white-space:nowrap;";
-
 const CLOSE_STYLE =
     "all:unset;cursor:pointer;font-size:13px;line-height:1;" +
     "padding-right:10px;user-select:none;align-self:center;color:rgba(255,255,255,0.8);";
 
 const BG = {
-    success: "background:#853953;",
     error: "background:#dc2626;",
 } as const;
 
@@ -191,55 +187,6 @@ export function renderErrorBanner(message: string): void {
       <span style="${TEXT_STYLE}">Error: ${escapeHtml(message)}</span>
       <button style="${CLOSE_STYLE}" aria-label="Close">\u00d7</button>
     </div>`;
-    host.querySelector("button")?.addEventListener("click", () => removeBanner());
-    requestAnimationFrame(() => adjustPageForBanner());
-}
-
-export function renderMatchedBanner(
-    matched: { doi: string; result: ReplicationResult }[]
-): void {
-    if (matched.length === 0) {
-        removeBanner();
-        return;
-    }
-
-    const totalRepl = matched.reduce(
-        (sum, m) => sum + m.result.record.stats.n_replications_total, 0
-    );
-    const totalRepro = matched.reduce(
-        (sum, m) => sum + m.result.record.stats.n_reproductions_total, 0
-    );
-
-    if (totalRepl === 0 && totalRepro === 0) {
-        removeBanner();
-        return;
-    }
-
-    const host = ensureBannerHost();
-
-    const replLabel = totalRepl === 1 ? "replication" : "replications";
-    const reproLabel = totalRepro === 1 ? "reproduction" : "reproductions";
-
-    const parts: string[] = [];
-    if (totalRepl > 0) parts.push(`${totalRepl} ${replLabel}`);
-    if (totalRepro > 0) parts.push(`${totalRepro} ${reproLabel}`);
-    const countsText = parts.join(", ");
-
-    const doiCount = matched.length;
-    const summary = doiCount === 1
-        ? countsText
-        : `Replication/reproduction data found for ${doiCount} DOIs (${countsText})`;
-
-    const matchedDois = matched.map((m) => m.doi as DoiString);
-
-    host.innerHTML = `
-    <div style="${BANNER_BASE_STYLE}${BG.success}">
-      <span style="${LOGO_STYLE}">FORRT ORE</span>
-      <span style="${TEXT_STYLE}">${summary}</span>
-      <a data-flora-details-link style="${LINK_STYLE}" target="_blank" rel="noopener">View details</a>
-      <button style="${CLOSE_STYLE}" aria-label="Close">\u00d7</button>
-    </div>`;
-    bindAtlasLink(host.querySelector<HTMLAnchorElement>("[data-flora-details-link]"), matchedDois);
     host.querySelector("button")?.addEventListener("click", () => removeBanner());
     requestAnimationFrame(() => adjustPageForBanner());
 }

@@ -21,15 +21,6 @@ const VALIDATION_CACHE = new BlobCache<{ valid: boolean }>({
 });
 
 /**
- * Check whether a single DOI resolves via doi.org.
- * Results are cached in chrome.storage.local for 7 days.
- */
-export async function validateDOI(doi: DoiString): Promise<boolean> {
-  const result = await validateDOIs([doi]);
-  return result.get(doi) ?? false;
-}
-
-/**
  * Validate multiple DOIs in parallel via the doi.org Handle System API.
  * Returns a Map of DOI → valid (true/false).
  * Cached results are reused; uncached DOIs are checked in parallel.
