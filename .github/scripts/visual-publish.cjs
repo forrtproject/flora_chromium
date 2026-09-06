@@ -67,7 +67,7 @@ module.exports = async ({github, context}) => {
     const beforePath = encodePath(oldName);
     const before = `https://raw.githubusercontent.com/${pr.base.repo.full_name}/${pr.base.sha}/${beforePath}`;
     const after = `https://raw.githubusercontent.com/${pr.head.repo.full_name}/${pr.head.sha}/${encodePath(f.filename)}`;
-    const preview = `\n<details><summary>${htmlLabel(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${beforeExists ? `![Before](${before})` : 'New screenshot'} | ${afterExists ? `![After](${after})` : 'Removed screenshot'} |\n\n</details>`;
+    const preview = `\n<details open><summary>${htmlLabel(f.filename)}</summary>\n\n| Committed base | Committed PR |\n| --- | --- |\n| ${beforeExists ? `![Before](${before})` : 'New screenshot'} | ${afterExists ? `![After](${after})` : 'Removed screenshot'} |\n\n</details>`;
     if (previewChars + preview.length > previewLimit) { omittedPreviews++; return ''; }
     previewChars += preview.length;
     return preview;
