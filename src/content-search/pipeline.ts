@@ -17,10 +17,11 @@ import {createIndicatorPanel, updateIndicatorPillBadges} from "@shared/indicator
 import {applyPlacement} from "@shared/site-adapters";
 import {showToast} from "@shared/toast";
 import {fetchOpenAccess} from "@shared/openaccess";
-import {activeWorkSignal, beginCancellableWork, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
+import {activeWorkSignal, canStartAutomaticWork, resumeAutomaticWork} from "@shared/work-cancellation";
 import {waitUntilVisible} from "@shared/page-visibility";
 import {
     beginWorkIndicator,
+    waitForWorkToFinish,
     count,
     endWorkIndicator,
     isWorkCancelled,
@@ -45,6 +46,7 @@ const lookupState = new Map<DoiString, LookupState>();
 const retractions = new Map<DoiString, RetractionResponse>();
 const unavailableRetractionDois = new Set<DoiString>();
 let retractionRetryToast: HTMLElement | null = null;
+let retractionRetryQueued = false;
 function dismissRetractionRetry(): void {
     // Other provider alerts reuse this host; do not dismiss their newer message.
     if (retractionRetryToast?.textContent?.includes("Retraction checks unavailable.")) retractionRetryToast.remove();
@@ -431,8 +433,14 @@ async function checkSearchRetractions(dois: DoiString[]): Promise<RetractionResp
             tone: "error", duration: 0,
             action: {label: "Retry", onClick: async () => {
                 if (searchHidden || location.href !== passUrl) { dismissRetractionRetry(); return; }
+                if (retractionRetryQueued) return;
+                const queuedSignal = activeWorkSignal();
+                const wasCancelled = queuedSignal?.aborted;
+                retractionRetryQueued = true;
+                try { await waitForWorkToFinish(); }
+                finally { retractionRetryQueued = false; }
+                if (searchHidden || location.href !== passUrl || (!wasCancelled && queuedSignal?.aborted)) return;
                 resumeAutomaticWork();
-                beginCancellableWork();
                 beginWorkIndicator({stages: ["notices"]});
                 try {
                     const recovered = await checkSearchRetractions([...unavailableRetractionDois]);
