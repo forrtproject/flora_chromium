@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "./work-cancellation";
 // Semantic Scholar paper id → DOI, in one batched API call per 500 ids. Runs
 // in the service worker (see resolveSemanticScholarIdsViaWorker) so the fetch
 // has the api.semanticscholar.org host permission.
@@ -24,8 +25,9 @@ export function normaliseSemanticScholarId(raw: unknown): string | null {
     return match ? match[1].toLowerCase() : null;
 }
 
-async function fetchPapers(ids: string[]): Promise<Array<BatchPaper | null>> {
-    const response = await fetch(`${S2_BATCH}?fields=externalIds`, {
+async function fetchPapers(ids: string[], signal?: AbortSignal): Promise<Array<BatchPaper | null>> {
+    const response = await fetchWithDeadline(`${S2_BATCH}?fields=externalIds`, {
+        signal,
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({ids}),
@@ -41,16 +43,17 @@ async function fetchPapers(ids: string[]): Promise<Array<BatchPaper | null>> {
  * 40-hex id. A paper with no DOI maps to null; an id absent from the map was
  * not returned (unknown id or failed batch).
  */
-export async function resolveSemanticScholarIds(rawIds: string[]): Promise<Map<string, DoiString | null>> {
+export async function resolveSemanticScholarIds(rawIds: string[], signal?: AbortSignal): Promise<Map<string, DoiString | null>> {
     const results = new Map<string, DoiString | null>();
     const ids = [...new Set(rawIds.map(normaliseSemanticScholarId).filter((id): id is string => id !== null))];
     if (ids.length === 0) return results;
 
     for (let i = 0; i < ids.length; i += MAX_IDS_PER_REQUEST) {
+        signal?.throwIfAborted();
         const batch = ids.slice(i, i + MAX_IDS_PER_REQUEST);
         try {
             // The response array is aligned with the request; unknown ids come back null.
-            const papers = await withResolveTimeout(fetchPapers(batch), "Semantic Scholar resolve");
+            const papers = await withResolveTimeout(fetchPapers(batch, signal), "Semantic Scholar resolve");
             papers.forEach((paper, index) => {
                 if (!paper) return;
                 const doi = paper.externalIds?.DOI;

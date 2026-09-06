@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "./work-cancellation";
 import { z } from "zod";
 import type { DoiString, ReplicationResult } from "./types";
 import { ReplicationResultSchema } from "./types";
@@ -22,7 +23,7 @@ const BATCH_SIZE = 50;
  * Splits into batches of 50 to avoid 414 URI-too-long errors.
  */
 export async function lookupDOIs(
-  dois: DoiString[]
+  dois: DoiString[], signal?: AbortSignal
 ): Promise<Map<DoiString, ReplicationResult>> {
   if (dois.length === 0) {
     return new Map();
@@ -33,11 +34,12 @@ export async function lookupDOIs(
   debugLog(`Looking up ${dois.length} DOIs in ${totalBatches} batch(es) of ${BATCH_SIZE}`);
 
   for (let i = 0; i < dois.length; i += BATCH_SIZE) {
+        signal?.throwIfAborted();
     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
     const batch = dois.slice(i, i + BATCH_SIZE);
     debugLog(`Batch ${batchNum}/${totalBatches}: ${batch.length} DOIs`);
     try {
-      const batchResults = await lookupBatch(batch);
+      const batchResults = await lookupBatch(batch, signal);
       for (const [doi, result] of batchResults) {
         results.set(doi, result);
       }
@@ -51,11 +53,12 @@ export async function lookupDOIs(
   return results;
 }
 
-export async function createDoiSet(dois: DoiString[]): Promise<string | null> {
+export async function createDoiSet(dois: DoiString[], signal?: AbortSignal): Promise<string | null> {
   if (dois.length === 0) return null;
 
   try {
-    const response = await fetch(`${API_BASE}/v1/sets`, {
+    const response = await fetchWithDeadline(`${API_BASE}/v1/sets`, {
+      signal,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dois }),
@@ -75,11 +78,11 @@ export async function createDoiSet(dois: DoiString[]): Promise<string | null> {
 }
 
 async function lookupBatch(
-  dois: DoiString[]
+  dois: DoiString[], signal?: AbortSignal
 ): Promise<Map<DoiString, ReplicationResult>> {
   const doisParam = dois.join(",");
-  const response = await fetch(
-    `${API_BASE}/v1/original-lookup?dois=${encodeURIComponent(doisParam)}`
+  const response = await fetchWithDeadline(
+    `${API_BASE}/v1/original-lookup?dois=${encodeURIComponent(doisParam)}`, {signal}
   );
 
   if (!response.ok) {

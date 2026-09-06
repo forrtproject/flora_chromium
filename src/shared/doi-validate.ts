@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 import type { DoiString } from "./types";
 import { debugLog, debugWarn } from "./debug";
 import { BlobCache } from "./blob-cache";
@@ -76,7 +77,7 @@ export async function validateDOIs(
       // encodeURIComponent on the full DOI would collapse all '/' to %2F,
       // making the server see a single opaque segment instead of a path.
       const encodedHandle = doi.split("/").map(encodeURIComponent).join("/");
-      const response = await fetch(`${HANDLE_API}${encodedHandle}`);
+      const response = await fetchWithDeadline(`${HANDLE_API}${encodedHandle}`);
       if (!response.ok) {
         // 404 = the Handle System has no record of this DOI → invalid.
         // Any other non-OK status (429, 5xx) is transient — leave unknown.

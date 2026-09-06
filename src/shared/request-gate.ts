@@ -1,3 +1,4 @@
+import {abortableDelay, fetchWithDeadline, activeWorkSignal} from "./work-cancellation";
 import {debugWarn} from "./debug";
 
 /** Run `worker` over `items` with at most `limit` in flight. */
@@ -27,7 +28,6 @@ function parseRetryAfter(header: string | null): number | null {
     return Number.isNaN(at) ? null : at - Date.now();
 }
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Per-platform fetch gate: caps concurrent requests, spaces their starts by
@@ -49,7 +49,9 @@ export class RequestGate {
     ) {}
 
     async fetch(url: string, init?: RequestInit): Promise<Response> {
-        await this.acquire();
+        const signal = init?.signal ?? activeWorkSignal() ?? new AbortController().signal;
+        signal.throwIfAborted();
+        await this.acquire(signal);
         try {
             for (let attempt = 0; ; attempt++) {
                 // Reserve a start slot again if another in-flight request
@@ -62,10 +64,11 @@ export class RequestGate {
                         throw new Error(`${this.name} rate limited (paused for another ${Math.round((startAt - now) / 1000)} s)`);
                     }
                     this.nextStartAt = startAt + this.minIntervalMs;
-                    if (startAt > now) await sleep(startAt - now);
+                    if (startAt > now) await abortableDelay(startAt - now, signal);
                 } while (this.blockedUntil > Date.now());
 
-                const response = await fetch(url, init);
+                signal.throwIfAborted();
+                const response = await fetchWithDeadline(url, {...init, signal});
                 if (response.status !== 429) return response;
 
                 const backoff = parseRetryAfter(response.headers.get("retry-after")) ?? DEFAULT_BACKOFF_MS;
@@ -82,12 +85,25 @@ export class RequestGate {
         }
     }
 
-    private acquire(): Promise<void> {
+    private acquire(signal: AbortSignal): Promise<void> {
         if (this.active < this.maxConcurrent) {
             this.active++;
             return Promise.resolve();
         }
-        return new Promise((resolve) => this.waiting.push(() => { this.active++; resolve(); }));
+        return new Promise((resolve, reject) => {
+            const start = () => {
+                signal.removeEventListener("abort", abort);
+                this.active++;
+                resolve();
+            };
+            const abort = () => {
+                const index = this.waiting.indexOf(start);
+                if (index >= 0) this.waiting.splice(index, 1);
+                reject(signal.reason);
+            };
+            signal.addEventListener("abort", abort, {once: true});
+            this.waiting.push(start);
+        });
     }
 
     private release(): void {

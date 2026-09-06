@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "./work-cancellation";
 // PMC id / PMID → DOI via NCBI's ID Converter. NCBI sends no CORS headers, so
 // this only runs in the service worker (see resolvePmcIdsViaWorker).
 //
@@ -53,7 +54,7 @@ const NORMALISERS: Record<NcbiIdType, (raw: unknown) => string | null> = {
     pmid: normalisePmid,
 };
 
-async function fetchIdConv(ids: string[], idtype: NcbiIdType): Promise<IdConvRecord[]> {
+async function fetchIdConv(ids: string[], idtype: NcbiIdType, signal?: AbortSignal): Promise<IdConvRecord[]> {
     const {email} = await getSettings();
     const params = new URLSearchParams({
         ids: ids.join(","),
@@ -64,7 +65,7 @@ async function fetchIdConv(ids: string[], idtype: NcbiIdType): Promise<IdConvRec
     });
     if (email) params.set("email", email);
 
-    const response = await fetch(`${IDCONV_BASE}?${params.toString()}`);
+    const response = await fetchWithDeadline(`${IDCONV_BASE}?${params.toString()}`, {signal});
     if (!response.ok) throw new Error(`ID converter HTTP ${response.status}`);
     const data = (await response.json()) as {records?: IdConvRecord[]};
     return data.records ?? [];
@@ -77,7 +78,7 @@ async function fetchIdConv(ids: string[], idtype: NcbiIdType): Promise<IdConvRec
  */
 export async function resolvePmcIds(
     rawIds: string[],
-    idtype: NcbiIdType = "pmcid"
+    idtype: NcbiIdType = "pmcid", signal?: AbortSignal
 ): Promise<Map<string, DoiString | null>> {
     const normalise = NORMALISERS[idtype];
     const results = new Map<string, DoiString | null>();
@@ -98,10 +99,11 @@ export async function resolvePmcIds(
 
     const updates: Array<[string, {doi: string | null}]> = [];
     for (let i = 0; i < uncached.length; i += MAX_IDS_PER_REQUEST) {
+        signal?.throwIfAborted();
         const batch = uncached.slice(i, i + MAX_IDS_PER_REQUEST);
         let records: IdConvRecord[];
         try {
-            records = await withResolveTimeout(fetchIdConv(batch, idtype), `NCBI resolve (${idtype})`);
+            records = await withResolveTimeout(fetchIdConv(batch, idtype, signal), `NCBI resolve (${idtype})`);
         } catch (err) {
             debugWarn(`NCBI resolve (${idtype}): batch of ${batch.length} failed, retrying next pass —`, err);
             continue;

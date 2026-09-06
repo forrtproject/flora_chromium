@@ -1,3 +1,4 @@
+import {beginCancellableWork, endCancellableWork, cancelWork, workSignal} from "./work-cancellation";
 // Progress toast — the bottom-right indicator shown while ORE works a page.
 // Stage-weighted, not item-counted: each stage is one batched worker call.
 //
@@ -345,6 +346,7 @@ function buildFooter(): HTMLElement {
     cancel.title = "Stop this pass — ORE runs again on the next page";
     cancel.addEventListener("click", () => {
         cancelled = true;
+        cancelWork();
         dismissed = true;
         clearTimers();
         removeToast();
@@ -679,6 +681,7 @@ export function beginWorkIndicator(plan?: WorkPlan): void {
     refCount++;
     // Also covers a pass starting while the last one's toast is still fading.
     if (refCount === 1) {
+        beginCancellableWork();
         // The finished-pass toast holds a copy button, so it is rebuilt whole.
         if (finished) removeToast();
         progress = 0;
@@ -766,7 +769,7 @@ export function updateWorkItem(id: string, status: WorkItemStatus, detail?: stri
 
 /** True once the user pressed Cancel on this pass; pipelines stop at their next stage boundary. */
 export function isWorkCancelled(): boolean {
-    return cancelled;
+    return cancelled || workSignal().aborted;
 }
 
 /** Hide the toast once all outstanding work has finished. */
@@ -774,6 +777,7 @@ export function endWorkIndicator(): void {
     if (refCount === 0) return; // unmatched end — nothing to close
     refCount--;
     if (refCount > 0) return;
+    endCancellableWork();
 
     const ending = currentStage ? stages.find((entry) => entry.stage === currentStage) : undefined;
     if (ending && ending.startedAt !== undefined && ending.endedAt === undefined) {
@@ -825,6 +829,7 @@ export function showWorkIndicator(): void {
 export function _resetWorkIndicatorForTesting(): void {
     clearTimers();
     refCount = 0;
+    endCancellableWork();
     progress = 0;
     labelText = DEFAULT_LABEL;
     suppressed = false;

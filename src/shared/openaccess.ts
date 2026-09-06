@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 // Open Access status for a DOI via Unpaywall, cached in chrome.storage.local.
 // Used to surface a lock/unlock icon next to the DOIs we inject on the page.
 
@@ -90,7 +91,7 @@ export async function fetchOpenAccess(doi: string): Promise<OpenAccessStatus | n
     if (!email) return null;
 
     try {
-        const resp = await fetch(
+        const resp = await fetchWithDeadline(
             `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`
         );
         if (!resp.ok) return null;

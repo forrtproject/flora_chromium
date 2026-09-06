@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "@shared/work-cancellation";
 // Formatted citations for a DOI via content negotiation. Crossref's transform
 // endpoint renders the CSL styles; doi.org's negotiation service is the fallback
 // for DOIs Crossref doesn't own (DataCite: datasets, Zenodo, figshare).
@@ -267,7 +268,7 @@ async function requestCitation(doi: string, format: CitationFormat): Promise<Cit
     let reachable = false;
     for (const url of [crossrefUrl(doi, email), doiOrgUrl(doi)]) {
         try {
-            const response = await fetch(url, {headers: {Accept: format.accept}});
+            const response = await fetchWithDeadline(url, {headers: {Accept: format.accept}});
             if (response.status < 500) reachable = true;
             if (!response.ok) continue;
             const raw = await response.text();

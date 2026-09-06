@@ -1,3 +1,5 @@
+import {SharedRequest} from "@shared/shared-request";
+import {cancelWorkerRequest, runWorkerRequest, fetchWithDeadline} from "@shared/work-cancellation";
 import {LocalCache, MONTH_MS} from "@shared/cache";
 import {createDoiSet, lookupDOIs} from "@shared/flora-api";
 import {RET_MAP_KEY, storageSync, type RetractionMaps} from "@shared/data-extract";
@@ -93,10 +95,15 @@ ensureRetractionSyncAlarm().catch((err) => {
 
 
 /** In-flight dedup: prevents duplicate API calls for the same DOI */
-const inflight = new Map<DoiString, Promise<ReplicationResult | null>>();
+const inflight = new Map<DoiString, SharedRequest<Map<DoiString, ReplicationResult>>>();
 
 chrome.runtime.onMessage.addListener(
     (message: unknown, sender, sendResponse) => {
+        if ((message as {type?: string} | null)?.type === "FLORA_CANCEL_REQUEST") {
+            cancelWorkerRequest(message, sender);
+            return false;
+        }
+        const run = <T>(task: (signal?: AbortSignal) => Promise<T>) => runWorkerRequest(message, sender, task);
         if (
             typeof message === "object" &&
             message !== null &&
@@ -131,7 +138,7 @@ chrome.runtime.onMessage.addListener(
 
         if (isLookupRequest(message)) {
             const dois = message.dois;
-            handleLookup(dois)
+            run(signal => handleLookup(dois, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -146,7 +153,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isCreateSetRequest(message)) {
-            createDoiSet(message.dois)
+            run(signal => createDoiSet(message.dois, signal))
                 .then((setId) =>
                     sendResponse({type: "FLORA_CREATE_SET_RESULT", setId} satisfies CreateSetResponse)
                 )
@@ -206,7 +213,7 @@ chrome.runtime.onMessage.addListener(
             return true;
         }
         if (isSheetFetchRequest(message)) {
-            handleSheetFetch(message.spreadsheetId, message.gid)
+            run(signal => handleSheetFetch(message.spreadsheetId, message.gid, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -219,7 +226,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isAugmentRequest(message)) {
-            handleAugment(message.requests)
+            run(signal => handleAugment(message.requests, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -231,7 +238,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isPmcResolveRequest(message)) {
-            handlePmcResolve(message.pmcids, message.idtype)
+            run(signal => handlePmcResolve(message.pmcids, message.idtype, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -243,7 +250,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isOpenAlexResolveRequest(message)) {
-            handleOpenAlexResolve(message.ids)
+            run(signal => handleOpenAlexResolve(message.ids, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -255,7 +262,7 @@ chrome.runtime.onMessage.addListener(
         }
 
         if (isSemanticScholarResolveRequest(message)) {
-            handleSemanticScholarResolve(message.ids)
+            run(signal => handleSemanticScholarResolve(message.ids, signal))
                 .then(sendResponse)
                 .catch(() =>
                     sendResponse({
@@ -313,7 +320,7 @@ async function takeReport(consume: boolean): Promise<string | null> {
     return expired ? null : pending.report;
 }
 
-async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
+async function handleLookup(dois: DoiString[], signal?: AbortSignal): Promise<LookupResponse> {
     const results: Record<string, ReplicationResult> = {};
     const errors: Record<string, string> = {};
     const toFetch: DoiString[] = [];
@@ -326,8 +333,9 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
         const hit = cached.get(doi);
         if (hit) {
             results[doi] = hit;
-        } else if (inflight.has(doi)) {
-            const r = await inflight.get(doi)!;
+        } else if (inflight.has(doi) && !inflight.get(doi)!.aborted) {
+            const shared = await inflight.get(doi)!.subscribe(signal);
+            const r = shared.get(doi);
             if (r) results[doi] = r;
         } else {
             toFetch.push(doi);
@@ -339,45 +347,40 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
     }
 
     // Batch API call for uncached DOIs
-    const batchPromise = lookupDOIs(toFetch);
-
-    // Register each DOI as in-flight (catch to prevent unhandled rejection —
-    // the main try/catch below handles the actual error reporting)
-    for (const doi of toFetch) {
-        inflight.set(
-            doi,
-            batchPromise.then((map) => map.get(doi) ?? null).catch(() => null)
-        );
-    }
+    signal?.throwIfAborted();
+    const batch = new SharedRequest(async (transportSignal: AbortSignal) => {
+        try {
+            const apiResults = await lookupDOIs(toFetch, transportSignal);
+            try {
+                const writes: Array<[string, ReplicationResult]> = [];
+                for (const doi of toFetch) {
+                    const result = apiResults.get(doi);
+                    if (result) writes.push([doi, result]);
+                }
+                await cache.setMany(writes, MONTH_MS);
+            } catch (err) {
+                debugWarn("Lookup: cache write failed —", err);
+            }
+            return apiResults;
+        } finally {
+            for (const doi of toFetch) if (inflight.get(doi) === batch) inflight.delete(doi);
+        }
+    });
+    for (const doi of toFetch) inflight.set(doi, batch);
 
     try {
-        const apiResults = await batchPromise;
+        const apiResults = await batch.subscribe(signal);
 
-        const writes: Array<[string, ReplicationResult]> = [];
         for (const doi of toFetch) {
-            const r = apiResults.get(doi);
-            if (r) {
-                results[doi] = r;
-                writes.push([doi, r]);
-            }
-            // No result (no record yet, or a transient batch failure): do NOT
-            // cache. We re-query every time so newly added FORRT data surfaces
-            // instead of being suppressed by a stale negative cache entry.
+            const result = apiResults.get(doi);
+            if (result) results[doi] = result;
         }
-        try {
-            await cache.setMany(writes, MONTH_MS);
-        } catch (err) {
-            debugWarn(`Lookup: cache write failed for ${writes.length} DOI(s) —`, err);
-        }
+
     } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
         debugError(`Lookup: FORRT API failed for ${toFetch.length} DOI(s) — ${msg}`, err);
         for (const doi of toFetch) {
             errors[doi] = msg;
-        }
-    } finally {
-        for (const doi of toFetch) {
-            inflight.delete(doi);
         }
     }
 
@@ -385,9 +388,9 @@ async function handleLookup(dois: DoiString[]): Promise<LookupResponse> {
 }
 
 async function handleAugment(
-    requests: AugmentRequest["requests"]
+    requests: AugmentRequest["requests"], signal?: AbortSignal
 ): Promise<AugmentResponse> {
-    const resultMap = await augmentDOIsDetailed(requests);
+    const resultMap = await augmentDOIsDetailed(requests, signal);
     const results: Record<string, string | null> = {};
     const sources: Record<string, AugmentSource | null> = {};
     const unanswered: string[] = [];
@@ -399,20 +402,20 @@ async function handleAugment(
     return { type: "FLORA_AUGMENT_RESULT", results, sources, unanswered };
 }
 
-async function handleOpenAlexResolve(ids: string[]): Promise<OpenAlexResolveResponse> {
+async function handleOpenAlexResolve(ids: string[], signal?: AbortSignal): Promise<OpenAlexResolveResponse> {
     const results: Record<string, string | null> = {};
-    for (const [id, doi] of await resolveOpenAlexIds(ids)) results[id] = doi;
+    for (const [id, doi] of await resolveOpenAlexIds(ids, signal)) results[id] = doi;
     return {type: "FLORA_OPENALEX_RESOLVE_RESULT", results};
 }
 
-async function handleSemanticScholarResolve(ids: string[]): Promise<SemanticScholarResolveResponse> {
+async function handleSemanticScholarResolve(ids: string[], signal?: AbortSignal): Promise<SemanticScholarResolveResponse> {
     const results: Record<string, string | null> = {};
-    for (const [id, doi] of await resolveSemanticScholarIds(ids)) results[id] = doi;
+    for (const [id, doi] of await resolveSemanticScholarIds(ids, signal)) results[id] = doi;
     return {type: "FLORA_S2_RESOLVE_RESULT", results};
 }
 
-async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid"): Promise<PmcResolveResponse> {
-    const resultMap = await resolvePmcIds(pmcids, idtype);
+async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid", signal?: AbortSignal): Promise<PmcResolveResponse> {
+    const resultMap = await resolvePmcIds(pmcids, idtype, signal);
     const results: Record<string, string | null> = {};
     for (const [pmcid, doi] of resultMap) results[pmcid] = doi ?? null;
     return {type: "FLORA_PMC_RESOLVE_RESULT", results};
@@ -420,11 +423,11 @@ async function handlePmcResolve(pmcids: string[], idtype: NcbiIdType = "pmcid"):
 
 async function handleSheetFetch(
     spreadsheetId: string,
-    gid: string
+    gid: string, signal?: AbortSignal
 ): Promise<SheetFetchResponse> {
     const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&gid=${gid}`;
     try {
-        const resp = await fetch(url, {credentials: "include"});
+        const resp = await fetchWithDeadline(url, {credentials: "include", signal});
         if (!resp.ok) {
             return {
                 type: "FLORA_SHEET_FETCH_RESULT",

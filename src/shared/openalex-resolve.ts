@@ -1,3 +1,4 @@
+import {fetchWithDeadline} from "./work-cancellation";
 // OpenAlex work id → DOI, in one batched API call per 50 ids. Runs in the
 // service worker (see resolveOpenAlexIdsViaWorker) so the polite-pool mailto
 // and any future pacing sit with the other OpenAlex traffic.
@@ -19,7 +20,7 @@ export function normaliseOpenAlexId(raw: unknown): string | null {
     return match ? `W${match[1]}` : null;
 }
 
-async function fetchWorks(ids: string[]): Promise<Array<{id?: string; doi?: string | null}>> {
+async function fetchWorks(ids: string[], signal?: AbortSignal): Promise<Array<{id?: string; doi?: string | null}>> {
     const {email} = await getSettings();
     const params = new URLSearchParams({
         filter: `openalex:${ids.join("|")}`,
@@ -27,7 +28,7 @@ async function fetchWorks(ids: string[]): Promise<Array<{id?: string; doi?: stri
         "per-page": String(MAX_IDS_PER_REQUEST),
     });
     if (email) params.set("mailto", email);
-    const response = await fetch(`${OPENALEX_WORKS}?${params.toString()}`);
+    const response = await fetchWithDeadline(`${OPENALEX_WORKS}?${params.toString()}`, {signal});
     if (!response.ok) throw new Error(`OpenAlex HTTP ${response.status}`);
     const data = (await response.json()) as {results?: Array<{id?: string; doi?: string | null}>};
     return data.results ?? [];
@@ -38,15 +39,16 @@ async function fetchWorks(ids: string[]): Promise<Array<{id?: string; doi?: stri
  * OpenAlex knows but has no DOI for maps to null; an id absent from the map
  * was not returned (unknown id or failed batch).
  */
-export async function resolveOpenAlexIds(rawIds: string[]): Promise<Map<string, DoiString | null>> {
+export async function resolveOpenAlexIds(rawIds: string[], signal?: AbortSignal): Promise<Map<string, DoiString | null>> {
     const results = new Map<string, DoiString | null>();
     const ids = [...new Set(rawIds.map(normaliseOpenAlexId).filter((id): id is string => id !== null))];
     if (ids.length === 0) return results;
 
     for (let i = 0; i < ids.length; i += MAX_IDS_PER_REQUEST) {
+        signal?.throwIfAborted();
         const batch = ids.slice(i, i + MAX_IDS_PER_REQUEST);
         try {
-            for (const work of await withResolveTimeout(fetchWorks(batch), "OpenAlex resolve")) {
+            for (const work of await withResolveTimeout(fetchWorks(batch, signal), "OpenAlex resolve")) {
                 const id = normaliseOpenAlexId(work.id);
                 if (!id) continue;
                 results.set(id, work.doi ? normaliseDOI(work.doi) : null);
