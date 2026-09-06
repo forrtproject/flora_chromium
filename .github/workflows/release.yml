@@ -21,6 +21,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run typecheck
       - run: npm run test
       - run: npm run build
       - name: Create zip
@@ -40,7 +41,7 @@ jobs:
           files: flora-extension.zip
           draft: true
       - name: Release
-        if: github.ref_type == 'tag' && github.ref == 'refs/heads/main'
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: flora-extension.zip
