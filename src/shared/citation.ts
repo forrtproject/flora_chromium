@@ -36,7 +36,6 @@ export const CITATION_FORMATS: readonly CitationFormat[] = [
     {id: "ris", label: "RIS (EndNote, Zotero)", accept: "application/x-research-info-systems", verbatim: true},
 ];
 
-export const DEFAULT_CITATION_FORMAT_ID = CITATION_FORMATS[0].id;
 
 /** Resolve a stored format id, falling back to the default for unknown ids. */
 export function citationFormat(id: string | null | undefined): CitationFormat {

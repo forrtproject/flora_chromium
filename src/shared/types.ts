@@ -134,8 +134,6 @@ export interface ClassifiedDois {
   referenceDois: DoiString[];
   /** All other DOIs found on the page */
   otherDois: DoiString[];
-  /** All DOIs marked retracted*/
-  retractedDois:DoiString[];
   /** Union of article + reference + other — every DOI found on the page. */
   allDois: DoiString[];
 }

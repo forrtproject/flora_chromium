@@ -11,7 +11,6 @@ import {augmentDOIsDetailed, type AugmentSource} from "@shared/doi-augment";
 import {resolvePmcIds, type NcbiIdType} from "@shared/pmc-resolve";
 import {resolveOpenAlexIds} from "@shared/openalex-resolve";
 import {resolveSemanticScholarIds} from "@shared/semanticscholar-resolve";
-import {getSettings, isSetupComplete} from "@shared/settings";
 import {appendDebugEntries, installDebugLogStore} from "@shared/debug-log";
 import {debugError, debugLog, debugWarn, isDebugEnabledAsync} from "@shared/debug";
 

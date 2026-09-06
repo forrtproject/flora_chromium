@@ -298,7 +298,7 @@ function rowIconWrapStyle(color: string, available: boolean, compact = false): s
     return `display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;flex-shrink:0;color:${color};opacity:${available ? "1" : "0.4"};`;
 }
 
-function rowSubStyle(available: boolean, compact = false): string {
+function rowSubStyle(compact = false): string {
     return `font-size:${compact ? "10px" : "10.5px"};color:#57606a;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
 }
 
@@ -343,7 +343,7 @@ function buildRow(opts: {
     <span style="${rowIconWrapStyle(opts.accent, opts.available, opts.compact)}">${opts.iconHtml}</span>
     <span style="${opts.compact ? ROW_LABEL_WRAP_COMPACT : ROW_LABEL_WRAP}">
       <span style="${opts.compact ? ROW_TITLE_STYLE_COMPACT : ROW_TITLE_STYLE}">${opts.title}</span>
-      <span data-flora-row-sub style="${rowSubStyle(opts.available, opts.compact)}">${subtitle}</span>
+      <span data-flora-row-sub style="${rowSubStyle(opts.compact)}">${subtitle}</span>
     </span>
     ${useLink ? `<span style="${rowActionStyle(opts.accent, opts.compact)}">${action}</span>` : ""}
   `;
