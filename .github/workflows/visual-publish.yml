@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
   statuses: write
 concurrency:
-  group: visual-publish-${{ github.event.workflow_run.head_branch }}
+  group: visual-publish-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 jobs:
   describe:
