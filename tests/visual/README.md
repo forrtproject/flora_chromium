@@ -208,3 +208,9 @@ as base/PR image pairs in the PR description. This covers changes to the test
 scenes or reference images even when both builds render identically with the
 new fixture catalogue. Artifact comparisons and committed-baseline comparisons
 are labeled separately because they answer different questions.
+
+Changes to visual fixtures, capture/publisher workflows, the publisher script,
+package manifests/lockfile, build configuration or extension manifest also
+require review. A PR cannot weaken its own capture and use its resulting
+all-pass artifact as evidence that approval is unnecessary. This is a review
+policy for regression detection, not a security sandbox for hostile extensions.
